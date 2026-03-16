@@ -5,12 +5,6 @@
 //! - Run on Startup (toggle)
 //! - Exit
 
-#[cfg(windows)]
-use anyhow::{Context, Result};
-
-#[cfg(windows)]
-use std::sync::mpsc::{self, Receiver, Sender};
-
 /// Commands that can be triggered from the tray menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
@@ -20,6 +14,9 @@ pub enum TrayCommand {
 }
 
 #[cfg(windows)]
+use std::sync::mpsc::{self, Receiver, Sender};
+
+#[cfg(windows)]
 pub struct TrayIcon {
     _tray: tray_icon::TrayIcon,
     menu_channel: Receiver<TrayCommand>,
@@ -27,7 +24,8 @@ pub struct TrayIcon {
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool) -> Result<Self> {
+    pub fn new(startup_enabled: bool) -> anyhow::Result<Self> {
+        use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
         use tray_icon::{Icon, TrayIconBuilder};
 
@@ -96,7 +94,9 @@ impl TrayIcon {
 }
 
 #[cfg(windows)]
-fn create_icon() -> Result<tray_icon::Icon> {
+fn create_icon() -> anyhow::Result<tray_icon::Icon> {
+    use anyhow::Context;
+    
     // Create a simple 16x16 blue/green earth-like icon
     let size = 16u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
@@ -144,7 +144,7 @@ pub mod startup {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ,
+        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, REG_VALUE_TYPE,
     };
 
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -173,7 +173,7 @@ pub mod startup {
             }
 
             let value_name = to_wide(APP_NAME);
-            let mut data_type = 0u32;
+            let mut data_type = REG_VALUE_TYPE::default();
             let mut data_size = 0u32;
             
             let exists = RegQueryValueExW(
@@ -219,13 +219,17 @@ pub mod startup {
             let key_path = to_wide(RUN_KEY);
             let mut hkey = HKEY::default();
             
-            RegOpenKeyExW(
+            let result = RegOpenKeyExW(
                 HKEY_CURRENT_USER,
                 PCWSTR(key_path.as_ptr()),
                 0,
                 KEY_WRITE,
                 &mut hkey,
-            ).context("Failed to open registry key")?;
+            );
+            
+            if result.is_err() {
+                anyhow::bail!("Failed to open registry key: {:?}", result);
+            }
 
             let value_name = to_wide(APP_NAME);
             let exe_str = exe_path.to_string_lossy();
@@ -244,7 +248,10 @@ pub mod startup {
             );
             
             let _ = RegCloseKey(hkey);
-            result.context("Failed to set registry value")?;
+            
+            if result.is_err() {
+                anyhow::bail!("Failed to set registry value: {:?}", result);
+            }
             
             tracing::info!("Enabled run on startup");
             Ok(())
@@ -256,13 +263,17 @@ pub mod startup {
             let key_path = to_wide(RUN_KEY);
             let mut hkey = HKEY::default();
             
-            RegOpenKeyExW(
+            let result = RegOpenKeyExW(
                 HKEY_CURRENT_USER,
                 PCWSTR(key_path.as_ptr()),
                 0,
                 KEY_WRITE,
                 &mut hkey,
-            ).context("Failed to open registry key")?;
+            );
+            
+            if result.is_err() {
+                anyhow::bail!("Failed to open registry key: {:?}", result);
+            }
 
             let value_name = to_wide(APP_NAME);
             

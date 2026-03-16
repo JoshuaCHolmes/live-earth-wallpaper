@@ -99,12 +99,15 @@ fn detect_windows_monitors() -> Result<MonitorLayout> {
 
     unsafe {
         let monitors_ptr = &mut monitors as *mut Vec<Monitor>;
-        EnumDisplayMonitors(
+        let result = EnumDisplayMonitors(
             HDC::default(),
             None,
             Some(enum_callback),
             LPARAM(monitors_ptr as isize),
-        )?;
+        );
+        if !result.as_bool() {
+            anyhow::bail!("EnumDisplayMonitors failed");
+        }
     }
 
     if monitors.is_empty() {
