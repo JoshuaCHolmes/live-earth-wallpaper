@@ -80,7 +80,7 @@ async fn fetch_tile(
     y: u32,
 ) -> Result<DynamicImage> {
     let url = format!(
-        "{}/himawari8/img/D531106/{}d/550/{}_{}_{}png",
+        "{}/himawari8/img/D531106/{}d/550/{}_{}_{}.png",
         HIMAWARI_BASE_URL,
         level.grid_size(),
         date_path,

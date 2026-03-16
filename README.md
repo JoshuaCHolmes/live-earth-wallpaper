@@ -42,26 +42,31 @@ cargo build --release
 
 Simply run the application. It will:
 
-1. Detect your monitor configuration
-2. Fetch the latest Himawari-8 satellite image
-3. Render the star field and planets for the current time
-4. Set the composite as your desktop wallpaper
-5. Update every 10 minutes
+1. Create a system tray icon
+2. Detect your monitor configuration
+3. Fetch the latest Himawari-8 satellite image
+4. Render the star field and planets for the current time
+5. Set the composite as your desktop wallpaper
+6. Update every 10 minutes
+
+### System Tray
+
+The application runs in the system tray with the following options:
+
+- **Refresh Now** - Immediately fetch new imagery and update wallpaper
+- **Run on Startup** - Toggle automatic startup with Windows (via registry)
+- **Exit** - Close the application
 
 ### Command Line Options
 
 - `--update-once` - Perform a single update and exit (useful for testing)
-
-### Exit
-
-Press `Ctrl+C` in the console window to exit gracefully.
 
 ## Technical Details
 
 ### Data Sources
 
 - **Earth imagery**: [Himawari-8](https://himawari8.nict.go.jp/) real-time full disk images
-- **Star catalog**: HYG Database v4.2 (subset of ~100 brightest stars embedded)
+- **Star catalog**: HYG Database v4.1 (8,921 stars, mag ≤ 6.5)
 - **Planet ephemeris**: NASA JPL orbital elements for J2000.0 epoch
 
 ### Astronomical Accuracy
@@ -71,6 +76,14 @@ Star and planet positions are calculated for the view from Himawari-8's geostati
 ### Architecture
 
 ```
+┌─────────────────────────────────────────┐
+│  System Tray                            │
+│  ├─ Refresh Now                         │
+│  ├─ Run on Startup (toggle)             │
+│  └─ Exit                                │
+└─────────────────────────────────────────┘
+            │
+            ▼
 ┌─────────────────────────────────────────┐
 │  Main Loop (10 min interval)            │
 │  ├─ Detect monitors (Win32 API)         │
@@ -86,11 +99,9 @@ Star and planet positions are calculated for the view from Himawari-8's geostati
 Currently, the application uses sensible defaults:
 
 - Update interval: 10 minutes
-- Image resolution: 4x4 tiles (2200×2200 Earth image)
+- Image resolution: 4×4 tiles (2200×2200 Earth image)
 - Star magnitude limit: 6.5 (naked eye visibility)
 - Field of view: 120°
-
-Future versions may include a configuration file or system tray UI.
 
 ## Development
 
