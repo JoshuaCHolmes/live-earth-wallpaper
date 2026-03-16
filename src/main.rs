@@ -7,13 +7,13 @@ mod astronomy;
 mod himawari;
 mod monitor;
 mod renderer;
+mod tray;
 mod wallpaper;
 
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::interval;
 
 /// Update interval in minutes
 const UPDATE_INTERVAL_MINUTES: u64 = 10;
@@ -21,8 +21,7 @@ const UPDATE_INTERVAL_MINUTES: u64 = 10;
 /// Himawari-8 image resolution level
 const IMAGE_LEVEL: himawari::ImageLevel = himawari::ImageLevel::Level4;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -31,72 +30,167 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    tracing::info!("Live Earth Wallpaper starting...");
+    tracing::info!("Live Earth Wallpaper v{}", env!("CARGO_PKG_VERSION"));
 
     // Check for --update-once flag for testing
     let args: Vec<String> = std::env::args().collect();
     if args.contains(&"--update-once".to_string()) {
         tracing::info!("Running single update (--update-once mode)");
-        if let Err(e) = update_wallpaper().await {
-            tracing::error!("Update failed: {}", e);
-            return Err(e);
-        }
-        return Ok(());
+        return run_single_update();
     }
 
-    // Create shutdown signal
+    // Run with system tray
+    run_with_tray()
+}
+
+fn run_single_update() -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(update_wallpaper())
+}
+
+#[cfg(windows)]
+fn run_with_tray() -> Result<()> {
+    use tray::{startup, TrayCommand, TrayIcon};
+    use winit::event_loop::{ControlFlow, EventLoop};
+
+    // Check current startup state
+    let startup_enabled = startup::is_enabled();
+    tracing::info!("Run on startup: {}", if startup_enabled { "enabled" } else { "disabled" });
+
+    // Create tray icon
+    let tray = TrayIcon::new(startup_enabled)?;
+    tracing::info!("System tray icon created");
+
+    // Create async runtime
+    let rt = tokio::runtime::Runtime::new()?;
+
+    // Shutdown flag
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
-    // Handle Ctrl+C
-    ctrlc_handler(r);
-
-    tracing::info!(
-        "Wallpaper will update every {} minutes. Press Ctrl+C to exit.",
-        UPDATE_INTERVAL_MINUTES
-    );
+    // Set up Ctrl+C handler
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })?;
 
     // Initial update
-    if let Err(e) = update_wallpaper().await {
+    tracing::info!("Performing initial wallpaper update...");
+    if let Err(e) = rt.block_on(update_wallpaper()) {
         tracing::error!("Initial update failed: {}", e);
     }
 
-    // Main loop
-    let mut timer = interval(Duration::from_secs(UPDATE_INTERVAL_MINUTES * 60));
-    timer.tick().await; // Skip first tick (we just did initial update)
+    // Create event loop for Windows message pump (required for tray)
+    let event_loop = EventLoop::new()?;
+    
+    let mut last_update = std::time::Instant::now();
+    let update_interval = Duration::from_secs(UPDATE_INTERVAL_MINUTES * 60);
 
-    while running.load(Ordering::SeqCst) {
-        timer.tick().await;
-        
+    tracing::info!(
+        "Wallpaper will update every {} minutes. Use tray icon to control.",
+        UPDATE_INTERVAL_MINUTES
+    );
+
+    event_loop.run(move |_event, elwt| {
+        elwt.set_control_flow(ControlFlow::WaitUntil(
+            std::time::Instant::now() + Duration::from_millis(100)
+        ));
+
+        // Check for tray commands
+        if let Some(cmd) = tray.poll_command() {
+            match cmd {
+                TrayCommand::RefreshNow => {
+                    tracing::info!("Manual refresh requested");
+                    if let Err(e) = rt.block_on(update_wallpaper()) {
+                        tracing::error!("Refresh failed: {}", e);
+                    }
+                    last_update = std::time::Instant::now();
+                }
+                TrayCommand::ToggleStartup => {
+                    match startup::toggle() {
+                        Ok(enabled) => {
+                            tracing::info!(
+                                "Run on startup {}",
+                                if enabled { "enabled" } else { "disabled" }
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to toggle startup: {}", e);
+                        }
+                    }
+                }
+                TrayCommand::Exit => {
+                    tracing::info!("Exit requested from tray");
+                    running.store(false, Ordering::SeqCst);
+                    elwt.exit();
+                    return;
+                }
+            }
+        }
+
+        // Check for scheduled update
+        if last_update.elapsed() >= update_interval {
+            tracing::info!("Scheduled update starting...");
+            if let Err(e) = rt.block_on(update_wallpaper()) {
+                tracing::error!("Scheduled update failed: {}", e);
+            }
+            last_update = std::time::Instant::now();
+        }
+
+        // Check for Ctrl+C
         if !running.load(Ordering::SeqCst) {
-            break;
+            tracing::info!("Shutting down...");
+            elwt.exit();
         }
+    })?;
 
-        tracing::info!("Scheduled update starting...");
-        if let Err(e) = update_wallpaper().await {
-            tracing::error!("Scheduled update failed: {}", e);
-        }
-    }
-
-    tracing::info!("Shutting down...");
     Ok(())
 }
 
-fn ctrlc_handler(running: Arc<AtomicBool>) {
-    #[cfg(unix)]
-    {
+#[cfg(not(windows))]
+fn run_with_tray() -> Result<()> {
+    use tokio::time::interval;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    
+    rt.block_on(async {
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+
+        // Handle Ctrl+C on Unix
         tokio::spawn(async move {
             tokio::signal::ctrl_c().await.ok();
-            running.store(false, Ordering::SeqCst);
+            r.store(false, Ordering::SeqCst);
         });
-    }
-    
-    #[cfg(windows)]
-    {
-        let _ = ctrlc::set_handler(move || {
-            running.store(false, Ordering::SeqCst);
-        });
-    }
+
+        tracing::info!(
+            "Wallpaper will update every {} minutes. Press Ctrl+C to exit.",
+            UPDATE_INTERVAL_MINUTES
+        );
+
+        // Initial update
+        if let Err(e) = update_wallpaper().await {
+            tracing::error!("Initial update failed: {}", e);
+        }
+
+        let mut timer = interval(Duration::from_secs(UPDATE_INTERVAL_MINUTES * 60));
+        timer.tick().await;
+
+        while running.load(Ordering::SeqCst) {
+            timer.tick().await;
+            
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            tracing::info!("Scheduled update starting...");
+            if let Err(e) = update_wallpaper().await {
+                tracing::error!("Scheduled update failed: {}", e);
+            }
+        }
+
+        tracing::info!("Shutting down...");
+        Ok(())
+    })
 }
 
 async fn update_wallpaper() -> Result<()> {
