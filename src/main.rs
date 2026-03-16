@@ -11,6 +11,7 @@ mod tray;
 mod wallpaper;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -213,11 +214,15 @@ async fn update_wallpaper() -> Result<()> {
         .build()
         .context("Failed to create HTTP client")?;
 
-    // Fetch Earth image
-    tracing::info!("Fetching Himawari-8 satellite image...");
-    let (earth_image, timestamp) = himawari::fetch_earth_image(&client, IMAGE_LEVEL)
-        .await
-        .context("Failed to fetch Earth image")?;
+    // Try to fetch Earth image, fall back to cached if available
+    let (earth_image, timestamp): (image::RgbaImage, DateTime<Utc>) = 
+        match fetch_earth_with_fallback(&client).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("Failed to fetch Earth image: {}", e);
+                return Err(e);
+            }
+        };
 
     tracing::info!(
         "Earth image: {}x{} from {}",
@@ -251,4 +256,73 @@ async fn update_wallpaper() -> Result<()> {
     tracing::info!("Update complete in {:.1}s", elapsed.as_secs_f64());
 
     Ok(())
+}
+
+/// Fetch Earth image with fallback to cached version
+async fn fetch_earth_with_fallback(
+    client: &reqwest::Client,
+) -> Result<(image::RgbaImage, DateTime<Utc>)> {
+    
+    // Try to fetch fresh image
+    tracing::info!("Fetching Himawari-8 satellite image...");
+    match himawari::fetch_earth_image(client, IMAGE_LEVEL).await {
+        Ok((earth_image, timestamp)) => {
+            // Cache the successful fetch
+            if let Err(e) = cache_earth_image(&earth_image, &timestamp) {
+                tracing::warn!("Failed to cache Earth image: {}", e);
+            }
+            Ok((earth_image, timestamp))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to fetch fresh image: {}", e);
+            tracing::info!("Attempting to use cached image...");
+            
+            // Try to load cached image
+            load_cached_earth_image()
+                .context("No cached image available and fetch failed")
+        }
+    }
+}
+
+/// Cache the Earth image for fallback
+fn cache_earth_image(
+    image: &image::RgbaImage,
+    timestamp: &DateTime<Utc>,
+) -> Result<()> {
+    let cache_dir = wallpaper::wallpaper_dir()?;
+    let cache_path = cache_dir.join("cached_earth.png");
+    let meta_path = cache_dir.join("cached_earth.txt");
+    
+    image.save(&cache_path)?;
+    std::fs::write(&meta_path, timestamp.to_rfc3339())?;
+    
+    tracing::debug!("Cached Earth image to {}", cache_path.display());
+    Ok(())
+}
+
+/// Load cached Earth image
+fn load_cached_earth_image() -> Result<(image::RgbaImage, DateTime<Utc>)> {
+    let cache_dir = wallpaper::wallpaper_dir()?;
+    let cache_path = cache_dir.join("cached_earth.png");
+    let meta_path = cache_dir.join("cached_earth.txt");
+    
+    if !cache_path.exists() {
+        anyhow::bail!("No cached image found");
+    }
+    
+    let image = image::open(&cache_path)
+        .context("Failed to load cached image")?
+        .to_rgba8();
+    
+    let timestamp = if meta_path.exists() {
+        let ts_str = std::fs::read_to_string(&meta_path)?;
+        chrono::DateTime::parse_from_rfc3339(ts_str.trim())
+            .map(|dt| dt.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now())
+    } else {
+        Utc::now()
+    };
+    
+    tracing::info!("Using cached Earth image from {}", timestamp.format("%Y-%m-%d %H:%M UTC"));
+    Ok((image, timestamp))
 }

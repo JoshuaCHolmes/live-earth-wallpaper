@@ -43,7 +43,6 @@ impl ImageLevel {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ImageMetadata {
     pub date: String,
-    pub file: String,
 }
 
 /// Fetches the latest image metadata from Himawari-8

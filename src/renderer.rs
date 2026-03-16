@@ -106,10 +106,11 @@ impl Renderer {
         let pos = self.moon.screen_position(dt, width, height, self.fov);
         
         if pos.visible {
+            let phase = self.moon.phase();
             let illumination = self.moon.illumination();
             let radius = 8.0; // Moon appears larger than stars
             
-            draw_moon(canvas, pos.x as i32, pos.y as i32, radius, illumination);
+            draw_moon(canvas, pos.x as i32, pos.y as i32, radius, phase, illumination);
             
             tracing::debug!(
                 "Rendered Moon at ({:.0}, {:.0}) phase: {} ({:.0}% illuminated)",
@@ -243,7 +244,19 @@ fn draw_planet(canvas: &mut RgbaImage, cx: i32, cy: i32, radius: f64, r: u8, g: 
 }
 
 /// Draw moon with phase
-fn draw_moon(canvas: &mut RgbaImage, cx: i32, cy: i32, radius: f64, illumination: f64) {
+/// 
+/// We're viewing from Himawari-8's position (geostationary at 140.7°E), looking outward into space.
+/// The sun illuminates the moon from the same direction it illuminates Earth.
+/// 
+/// Phase convention (from Earth's surface, northern hemisphere):
+/// - Phase 0.0: New moon (between Earth and sun, dark side facing us)
+/// - Phase 0.25: First quarter (right half lit when viewed from Earth's surface)
+/// - Phase 0.5: Full moon (opposite side from sun, fully lit face toward Earth)
+/// - Phase 0.75: Last quarter (left half lit when viewed from Earth's surface)
+/// 
+/// Since we're looking FROM the satellite toward the moon (same direction as from Earth),
+/// the illumination direction follows the same pattern as seen from Earth.
+fn draw_moon(canvas: &mut RgbaImage, cx: i32, cy: i32, radius: f64, phase: f64, illumination: f64) {
     let width = canvas.width() as i32;
     let height = canvas.height() as i32;
     
@@ -259,14 +272,25 @@ fn draw_moon(canvas: &mut RgbaImage, cx: i32, cy: i32, radius: f64, illumination
                 let dist = ((dx * dx + dy * dy) as f64).sqrt();
                 
                 if dist <= radius {
-                    // Simple illumination model
+                    // Normalized position on moon disk (-1 to 1)
                     let normalized_x = dx as f64 / radius;
-                    let lit = if illumination > 0.5 {
-                        // Waxing: lit from right
-                        normalized_x > -(illumination * 2.0 - 1.0)
+                    
+                    // Terminator position based on phase:
+                    // At phase 0 (new): terminator at x=1 (nothing lit from our view)
+                    // At phase 0.25 (first quarter): terminator at x=0 (right half lit)
+                    // At phase 0.5 (full): terminator at x=-1 (all lit)
+                    // At phase 0.75 (last quarter): terminator at x=0 (left half lit)
+                    
+                    let lit = if phase < 0.5 {
+                        // Waxing: illumination grows from right side
+                        // terminator moves from +1 toward -1
+                        let terminator = 1.0 - phase * 4.0; // 1.0 at phase 0, -1.0 at phase 0.5
+                        normalized_x > terminator
                     } else {
-                        // Waning: lit from left
-                        normalized_x < (illumination * 2.0)
+                        // Waning: illumination shrinks from right side  
+                        // terminator moves from -1 toward +1
+                        let terminator = (phase - 0.5) * 4.0 - 1.0; // -1.0 at phase 0.5, 1.0 at phase 1.0
+                        normalized_x < terminator
                     };
                     
                     let brightness = if lit { 1.0 } else { 0.1 };
