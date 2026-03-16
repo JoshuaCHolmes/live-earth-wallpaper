@@ -1,0 +1,56 @@
+[package]
+name = "live-earth-wallpaper"
+version = "0.1.0"
+edition = "2021"
+description = "Live Earth wallpaper with accurate star field from Himawari-8 satellite imagery"
+authors = ["Joshua Holmes"]
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# HTTP client for fetching satellite images
+reqwest = { version = "0.11", features = ["rustls-tls", "json"], default-features = false }
+
+# Image processing
+image = "0.24"
+
+# Date/time calculations
+chrono = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Signal handling
+[target.'cfg(unix)'.dependencies]
+tokio = { version = "1", features = ["signal"] }
+
+# Windows-specific dependencies
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+tray-icon = "0.19"
+winit = { version = "0.30", features = ["rwh_06"] }
+ctrlc = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
