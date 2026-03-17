@@ -173,15 +173,12 @@ impl Renderer {
             
             // Draw label for stars
             if self.show_labels {
-                let label = if let Some(ref name) = star.name {
-                    name.clone()
-                } else {
-                    // For unnamed stars, show magnitude
-                    format!("{:.1}", star.magnitude)
-                };
-                // Dimmer label for dimmer/unnamed stars
-                let brightness = if star.name.is_some() { 180 } else { 120 };
-                draw_label(canvas, cx + 6, cy - 2, &label, brightness, vp_x, vp_y, vp_w, vp_h);
+                if let Some(ref label) = star.name {
+                    // Brighter labels for proper names (no digits = likely proper name)
+                    let is_proper_name = !label.chars().any(|c| c.is_ascii_digit());
+                    let brightness = if is_proper_name { 180 } else { 140 };
+                    draw_label(canvas, cx + 6, cy - 2, label, brightness, vp_x, vp_y, vp_w, vp_h);
+                }
             }
         }
     }
