@@ -12,6 +12,7 @@ mod wallpaper;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use monitor::MultiMonitorMode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,33 +34,45 @@ fn main() -> Result<()> {
 
     tracing::info!("Live Earth Wallpaper v{}", env!("CARGO_PKG_VERSION"));
 
-    // Check for --update-once flag for testing
+    // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
+    let duplicate_mode = args.contains(&"--duplicate".to_string());
+    let initial_mode = if duplicate_mode {
+        MultiMonitorMode::Duplicate
+    } else {
+        MultiMonitorMode::Span
+    };
+
+    // Check for --update-once flag for testing
     if args.contains(&"--update-once".to_string()) {
-        tracing::info!("Running single update (--update-once mode)");
-        return run_single_update();
+        tracing::info!("Running single update (--update-once mode, {:?})", initial_mode);
+        return run_single_update(initial_mode);
     }
 
     // Run with system tray
-    run_with_tray()
+    run_with_tray(initial_mode)
 }
 
-fn run_single_update() -> Result<()> {
+fn run_single_update(mode: MultiMonitorMode) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(update_wallpaper())
+    rt.block_on(update_wallpaper_with_mode(mode))
 }
 
 #[cfg(windows)]
-fn run_with_tray() -> Result<()> {
+fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     use tray::{startup, TrayCommand, TrayIcon};
     use winit::event_loop::{ControlFlow, EventLoop};
+
+    // Current mode (mutable)
+    let mut current_mode = initial_mode;
 
     // Check current startup state
     let startup_enabled = startup::is_enabled();
     tracing::info!("Run on startup: {}", if startup_enabled { "enabled" } else { "disabled" });
+    tracing::info!("Monitor mode: {:?}", current_mode);
 
     // Create tray icon
-    let tray = TrayIcon::new(startup_enabled)?;
+    let tray = TrayIcon::new(startup_enabled, current_mode)?;
     tracing::info!("System tray icon created");
 
     // Create async runtime
@@ -76,7 +89,7 @@ fn run_with_tray() -> Result<()> {
 
     // Initial update
     tracing::info!("Performing initial wallpaper update...");
-    if let Err(e) = rt.block_on(update_wallpaper()) {
+    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
         tracing::error!("Initial update failed: {}", e);
     }
 
@@ -101,7 +114,18 @@ fn run_with_tray() -> Result<()> {
             match cmd {
                 TrayCommand::RefreshNow => {
                     tracing::info!("Manual refresh requested");
-                    if let Err(e) = rt.block_on(update_wallpaper()) {
+                    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
+                        tracing::error!("Refresh failed: {}", e);
+                    }
+                    last_update = std::time::Instant::now();
+                }
+                TrayCommand::ToggleMode => {
+                    current_mode = match current_mode {
+                        MultiMonitorMode::Span => MultiMonitorMode::Duplicate,
+                        MultiMonitorMode::Duplicate => MultiMonitorMode::Span,
+                    };
+                    tracing::info!("Switched to {:?} mode, refreshing...", current_mode);
+                    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
                         tracing::error!("Refresh failed: {}", e);
                     }
                     last_update = std::time::Instant::now();
@@ -131,7 +155,7 @@ fn run_with_tray() -> Result<()> {
         // Check for scheduled update
         if last_update.elapsed() >= update_interval {
             tracing::info!("Scheduled update starting...");
-            if let Err(e) = rt.block_on(update_wallpaper()) {
+            if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
                 tracing::error!("Scheduled update failed: {}", e);
             }
             last_update = std::time::Instant::now();
@@ -148,7 +172,7 @@ fn run_with_tray() -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn run_with_tray() -> Result<()> {
+fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     use tokio::time::interval;
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -169,7 +193,7 @@ fn run_with_tray() -> Result<()> {
         );
 
         // Initial update
-        if let Err(e) = update_wallpaper().await {
+        if let Err(e) = update_wallpaper_with_mode(initial_mode).await {
             tracing::error!("Initial update failed: {}", e);
         }
 
@@ -184,7 +208,7 @@ fn run_with_tray() -> Result<()> {
             }
 
             tracing::info!("Scheduled update starting...");
-            if let Err(e) = update_wallpaper().await {
+            if let Err(e) = update_wallpaper_with_mode(initial_mode).await {
                 tracing::error!("Scheduled update failed: {}", e);
             }
         }
@@ -220,7 +244,7 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
         .context("Failed to create HTTP client")?;
 
     // Try to fetch Earth image, fall back to cached if available
-    let (earth_image, timestamp): (image::RgbaImage, DateTime<Utc>) = 
+    let (mut earth_image, timestamp, is_cached) = 
         match fetch_earth_with_fallback(&client).await {
             Ok(result) => result,
             Err(e) => {
@@ -229,11 +253,18 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
             }
         };
 
+    // If using cached image, convert to grayscale to indicate stale data
+    if is_cached {
+        tracing::info!("Using cached image - converting to grayscale");
+        earth_image = convert_to_grayscale(&earth_image);
+    }
+
     tracing::info!(
-        "Earth image: {}x{} from {}",
+        "Earth image: {}x{} from {}{}",
         earth_image.width(),
         earth_image.height(),
-        timestamp.format("%Y-%m-%d %H:%M UTC")
+        timestamp.format("%Y-%m-%d %H:%M UTC"),
+        if is_cached { " (cached)" } else { "" }
     );
 
     // Render composite
@@ -263,10 +294,27 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
     Ok(())
 }
 
+/// Convert an RGBA image to grayscale (preserving alpha)
+fn convert_to_grayscale(image: &image::RgbaImage) -> image::RgbaImage {
+    let mut gray = image.clone();
+    for pixel in gray.pixels_mut() {
+        // Standard luminance formula
+        let luma = (0.299 * pixel[0] as f32 
+                  + 0.587 * pixel[1] as f32 
+                  + 0.114 * pixel[2] as f32) as u8;
+        pixel[0] = luma;
+        pixel[1] = luma;
+        pixel[2] = luma;
+        // Keep alpha unchanged
+    }
+    gray
+}
+
 /// Fetch Earth image with fallback to cached version
+/// Returns (image, timestamp, is_cached)
 async fn fetch_earth_with_fallback(
     client: &reqwest::Client,
-) -> Result<(image::RgbaImage, DateTime<Utc>)> {
+) -> Result<(image::RgbaImage, DateTime<Utc>, bool)> {
     
     // Try to fetch fresh image
     tracing::info!("Fetching Himawari-8 satellite image...");
@@ -276,15 +324,16 @@ async fn fetch_earth_with_fallback(
             if let Err(e) = cache_earth_image(&earth_image, &timestamp) {
                 tracing::warn!("Failed to cache Earth image: {}", e);
             }
-            Ok((earth_image, timestamp))
+            Ok((earth_image, timestamp, false))
         }
         Err(e) => {
             tracing::warn!("Failed to fetch fresh image: {}", e);
             tracing::info!("Attempting to use cached image...");
             
             // Try to load cached image
-            load_cached_earth_image()
-                .context("No cached image available and fetch failed")
+            let (image, timestamp) = load_cached_earth_image()
+                .context("No cached image available and fetch failed")?;
+            Ok((image, timestamp, true))
         }
     }
 }

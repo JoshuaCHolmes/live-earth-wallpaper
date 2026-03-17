@@ -2,13 +2,17 @@
 //!
 //! Provides a minimal tray interface with:
 //! - Refresh Now
+//! - Toggle Mode (Span/Duplicate)
 //! - Run on Startup (toggle)
 //! - Exit
+
+use crate::monitor::MultiMonitorMode;
 
 /// Commands that can be triggered from the tray menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
     RefreshNow,
+    ToggleMode,
     ToggleStartup,
     Exit,
 }
@@ -24,7 +28,7 @@ pub struct TrayIcon {
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool) -> anyhow::Result<Self> {
+    pub fn new(startup_enabled: bool, mode: MultiMonitorMode) -> anyhow::Result<Self> {
         use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
         use tray_icon::{Icon, TrayIconBuilder};
@@ -33,6 +37,11 @@ impl TrayIcon {
         let menu = Menu::new();
         
         let refresh_item = MenuItem::with_id("refresh", "Refresh Now", true, None);
+        let mode_label = match mode {
+            MultiMonitorMode::Span => "Mode: Span (click to switch)",
+            MultiMonitorMode::Duplicate => "Mode: Duplicate (click to switch)",
+        };
+        let mode_item = MenuItem::with_id("mode", mode_label, true, None);
         let startup_item = MenuItem::with_id(
             "startup",
             if startup_enabled { "✓ Run on Startup" } else { "  Run on Startup" },
@@ -43,6 +52,7 @@ impl TrayIcon {
         let exit_item = MenuItem::with_id("exit", "Exit", true, None);
 
         menu.append(&refresh_item)?;
+        menu.append(&mode_item)?;
         menu.append(&startup_item)?;
         menu.append(&separator)?;
         menu.append(&exit_item)?;
@@ -68,6 +78,7 @@ impl TrayIcon {
                 if let Ok(event) = menu_rx.recv() {
                     let cmd = match event.id.0.as_str() {
                         "refresh" => Some(TrayCommand::RefreshNow),
+                        "mode" => Some(TrayCommand::ToggleMode),
                         "startup" => Some(TrayCommand::ToggleStartup),
                         "exit" => Some(TrayCommand::Exit),
                         _ => None,
@@ -296,7 +307,7 @@ pub struct TrayIcon;
 
 #[cfg(not(windows))]
 impl TrayIcon {
-    pub fn new(_startup_enabled: bool) -> anyhow::Result<Self> {
+    pub fn new(_startup_enabled: bool, _mode: crate::monitor::MultiMonitorMode) -> anyhow::Result<Self> {
         tracing::warn!("System tray not supported on this platform");
         Ok(Self)
     }
