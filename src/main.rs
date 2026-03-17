@@ -24,6 +24,17 @@ const UPDATE_INTERVAL_MINUTES: u64 = 10;
 const IMAGE_LEVEL: himawari::ImageLevel = himawari::ImageLevel::Level4;
 
 fn main() -> Result<()> {
+    // Enable per-monitor DPI awareness for accurate high-DPI rendering
+    // Must be called before any window/GUI operations
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        // Ignore errors - falls back to system DPI awareness on older Windows
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
