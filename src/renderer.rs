@@ -174,10 +174,14 @@ impl Renderer {
             // Draw label for stars
             if self.show_labels {
                 if let Some(ref label) = star.name {
-                    // Brighter labels for proper names (no digits = likely proper name)
+                    // Proper names (no digits) shown brighter than Bayer/Flamsteed designations
                     let is_proper_name = !label.chars().any(|c| c.is_ascii_digit());
                     let brightness = if is_proper_name { 180 } else { 140 };
                     draw_label(canvas, cx + 6, cy - 2, label, brightness, vp_x, vp_y, vp_w, vp_h);
+                } else {
+                    // Unnamed stars show magnitude
+                    let mag_label = format!("{:.1}", star.magnitude);
+                    draw_label(canvas, cx + 6, cy - 2, &mag_label, 120, vp_x, vp_y, vp_w, vp_h);
                 }
             }
         }
