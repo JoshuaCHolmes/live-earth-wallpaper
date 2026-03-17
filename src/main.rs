@@ -128,9 +128,9 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     );
 
     event_loop.run(move |_event, elwt| {
-        elwt.set_control_flow(ControlFlow::WaitUntil(
-            std::time::Instant::now() + Duration::from_millis(500)
-        ));
+        // Sleep briefly to avoid CPU spin while ensuring regular wakeups
+        std::thread::sleep(Duration::from_millis(500));
+        elwt.set_control_flow(ControlFlow::Poll);
 
         // Check for tray commands
         if let Some(cmd) = tray.poll_command() {
@@ -196,7 +196,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         // Check for star-only refresh (use cached Earth)
         else if last_star_refresh.elapsed() >= star_refresh_interval {
             if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                tracing::debug!("Star refresh...");
+                tracing::info!("Star refresh (cached Earth from {})...", timestamp.format("%H:%M UTC"));
                 if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode)) {
                     tracing::error!("Star refresh failed: {}", e);
                 }
