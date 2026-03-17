@@ -124,15 +124,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         MultiMonitorMode::Span => MultiMonitorMode::Duplicate,
                         MultiMonitorMode::Duplicate => MultiMonitorMode::Span,
                     };
-                    tracing::info!("Switched to {:?} mode, refreshing...", current_mode);
-                    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
-                        tracing::error!("Refresh failed: {}", e);
-                    }
-                    last_update = std::time::Instant::now();
+                    tray.set_mode(current_mode);
+                    tracing::info!("Switched to {:?} mode (will apply on next refresh)", current_mode);
                 }
                 TrayCommand::ToggleStartup => {
                     match startup::toggle() {
                         Ok(enabled) => {
+                            tray.set_startup(enabled);
                             tracing::info!(
                                 "Run on startup {}",
                                 if enabled { "enabled" } else { "disabled" }
