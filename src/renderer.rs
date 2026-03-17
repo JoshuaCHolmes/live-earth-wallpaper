@@ -21,9 +21,6 @@ fn calculate_earth_angular_diameter() -> f64 {
 /// Maximum star magnitude to render
 const MAX_STAR_MAGNITUDE: f64 = 7.5;
 
-/// Minimum star magnitude to show labels (only brightest stars)
-const LABEL_MIN_MAGNITUDE: f64 = 2.5;
-
 pub struct Renderer {
     star_catalog: StarCatalog,
     planetary_system: PlanetarySystem,
@@ -174,11 +171,17 @@ impl Renderer {
             draw_star_bounded(canvas, cx, cy, radius, r, g, b, star.magnitude,
                               vp_x, vp_y, vp_w, vp_h);
             
-            // Draw label for bright named stars
-            if self.show_labels && star.magnitude <= LABEL_MIN_MAGNITUDE {
-                if let Some(ref name) = star.name {
-                    draw_label(canvas, cx + 6, cy - 2, name, 180, vp_x, vp_y, vp_w, vp_h);
-                }
+            // Draw label for stars
+            if self.show_labels {
+                let label = if let Some(ref name) = star.name {
+                    name.clone()
+                } else {
+                    // For unnamed stars, show magnitude
+                    format!("{:.1}", star.magnitude)
+                };
+                // Dimmer label for dimmer/unnamed stars
+                let brightness = if star.name.is_some() { 180 } else { 120 };
+                draw_label(canvas, cx + 6, cy - 2, &label, brightness, vp_x, vp_y, vp_w, vp_h);
             }
         }
     }
@@ -496,6 +499,18 @@ fn get_char_bitmap(c: char) -> Option<[u8; 7]> {
         'X' => Some([0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001]),
         'Y' => Some([0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100]),
         'Z' => Some([0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111]),
+        '0' => Some([0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110]),
+        '1' => Some([0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110]),
+        '2' => Some([0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111]),
+        '3' => Some([0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110]),
+        '4' => Some([0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010]),
+        '5' => Some([0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110]),
+        '6' => Some([0b01110, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110]),
+        '7' => Some([0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000]),
+        '8' => Some([0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110]),
+        '9' => Some([0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110]),
+        '.' => Some([0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100]),
+        '-' => Some([0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000]),
         ' ' => Some([0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000]),
         _ => None,
     }
