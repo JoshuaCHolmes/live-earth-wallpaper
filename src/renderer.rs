@@ -21,10 +21,14 @@ fn calculate_earth_angular_diameter() -> f64 {
 /// Maximum star magnitude to render
 const MAX_STAR_MAGNITUDE: f64 = 7.5;
 
+/// Minimum star magnitude to show labels (only brightest stars)
+const LABEL_MIN_MAGNITUDE: f64 = 2.5;
+
 pub struct Renderer {
     star_catalog: StarCatalog,
     planetary_system: PlanetarySystem,
     moon: Moon,
+    show_labels: bool,
 }
 
 impl Renderer {
@@ -36,7 +40,13 @@ impl Renderer {
             star_catalog,
             planetary_system: PlanetarySystem::new(),
             moon: Moon::new(),
+            show_labels: false,
         }
+    }
+
+    /// Enable or disable object labels
+    pub fn set_show_labels(&mut self, show: bool) {
+        self.show_labels = show;
     }
 
     /// Render wallpaper for the given monitor layout and mode
@@ -163,6 +173,13 @@ impl Renderer {
             
             draw_star_bounded(canvas, cx, cy, radius, r, g, b, star.magnitude,
                               vp_x, vp_y, vp_w, vp_h);
+            
+            // Draw label for bright named stars
+            if self.show_labels && star.magnitude <= LABEL_MIN_MAGNITUDE {
+                if let Some(ref name) = star.name {
+                    draw_label(canvas, cx + 6, cy - 2, name, 180, vp_x, vp_y, vp_w, vp_h);
+                }
+            }
         }
     }
 
@@ -184,6 +201,11 @@ impl Renderer {
             let cy = vp_y as i32 + pos.y as i32;
             
             draw_planet_bounded(canvas, cx, cy, radius, r, g, b, vp_x, vp_y, vp_w, vp_h);
+            
+            // Draw planet label
+            if self.show_labels {
+                draw_label(canvas, cx + 8, cy - 2, planet.name, 220, vp_x, vp_y, vp_w, vp_h);
+            }
         }
     }
 
@@ -205,6 +227,11 @@ impl Renderer {
             let cy = vp_y as i32 + pos.y as i32;
             
             draw_moon_bounded(canvas, cx, cy, radius, phase, vp_x, vp_y, vp_w, vp_h);
+            
+            // Draw moon label
+            if self.show_labels {
+                draw_label(canvas, cx + 12, cy - 2, "Moon", 220, vp_x, vp_y, vp_w, vp_h);
+            }
         }
     }
 
@@ -438,4 +465,78 @@ fn blend_pixel(dst: &mut Rgba<u8>, src: &Rgba<u8>, alpha: u8) {
     dst[1] = (src[1] as f32 * a + dst[1] as f32 * inv_a) as u8;
     dst[2] = (src[2] as f32 * a + dst[2] as f32 * inv_a) as u8;
     dst[3] = 255;
+}
+
+/// Simple 5x7 pixel font for labels (A-Z, a-z, space)
+fn get_char_bitmap(c: char) -> Option<[u8; 7]> {
+    match c.to_ascii_uppercase() {
+        'A' => Some([0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001]),
+        'B' => Some([0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110]),
+        'C' => Some([0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110]),
+        'D' => Some([0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110]),
+        'E' => Some([0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111]),
+        'F' => Some([0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000]),
+        'G' => Some([0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110]),
+        'H' => Some([0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001]),
+        'I' => Some([0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110]),
+        'J' => Some([0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100]),
+        'K' => Some([0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001]),
+        'L' => Some([0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111]),
+        'M' => Some([0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001]),
+        'N' => Some([0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001]),
+        'O' => Some([0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]),
+        'P' => Some([0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000]),
+        'Q' => Some([0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101]),
+        'R' => Some([0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001]),
+        'S' => Some([0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110]),
+        'T' => Some([0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100]),
+        'U' => Some([0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110]),
+        'V' => Some([0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100]),
+        'W' => Some([0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001]),
+        'X' => Some([0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001]),
+        'Y' => Some([0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100]),
+        'Z' => Some([0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111]),
+        ' ' => Some([0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000]),
+        _ => None,
+    }
+}
+
+/// Draw a text label at the given position
+fn draw_label(
+    canvas: &mut RgbaImage,
+    x: i32, y: i32,
+    text: &str,
+    brightness: u8,
+    vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32,
+) {
+    let canvas_w = canvas.width() as i32;
+    let canvas_h = canvas.height() as i32;
+    let vp_left = vp_x as i32;
+    let vp_top = vp_y as i32;
+    let vp_right = vp_left + vp_w as i32;
+    let vp_bottom = vp_top + vp_h as i32;
+    
+    let color = Rgba([brightness, brightness, brightness, 255]);
+    let mut cursor_x = x;
+    
+    for c in text.chars() {
+        if let Some(bitmap) = get_char_bitmap(c) {
+            for (row, &bits) in bitmap.iter().enumerate() {
+                for col in 0..5 {
+                    if (bits >> (4 - col)) & 1 == 1 {
+                        let px = cursor_x + col;
+                        let py = y + row as i32;
+                        
+                        if px >= 0 && px < canvas_w && py >= 0 && py < canvas_h
+                           && px >= vp_left && px < vp_right && py >= vp_top && py < vp_bottom
+                        {
+                            let pixel = canvas.get_pixel_mut(px as u32, py as u32);
+                            blend_pixel(pixel, &color, brightness);
+                        }
+                    }
+                }
+            }
+        }
+        cursor_x += 6; // 5px char width + 1px spacing
+    }
 }

@@ -13,6 +13,7 @@ use crate::monitor::MultiMonitorMode;
 pub enum TrayCommand {
     RefreshNow,
     ToggleMode,
+    ToggleLabels,
     ToggleStartup,
     Exit,
 }
@@ -28,12 +29,13 @@ pub struct TrayIcon {
     _tray: tray_icon::TrayIcon,
     menu_channel: Receiver<TrayCommand>,
     mode_item: MenuItem,
+    labels_item: MenuItem,
     startup_item: MenuItem,
 }
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool, mode: MultiMonitorMode) -> anyhow::Result<Self> {
+    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool) -> anyhow::Result<Self> {
         use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem};
         use tray_icon::{Icon, TrayIconBuilder};
@@ -43,12 +45,14 @@ impl TrayIcon {
         
         let refresh_item = MenuItem::with_id("refresh", "Refresh Now", true, None);
         let mode_item = MenuItem::with_id("mode", Self::mode_label(mode), true, None);
+        let labels_item = MenuItem::with_id("labels", Self::labels_label(labels_enabled), true, None);
         let startup_item = MenuItem::with_id("startup", Self::startup_label(startup_enabled), true, None);
         let separator = PredefinedMenuItem::separator();
         let exit_item = MenuItem::with_id("exit", "Exit", true, None);
 
         menu.append(&refresh_item)?;
         menu.append(&mode_item)?;
+        menu.append(&labels_item)?;
         menu.append(&startup_item)?;
         menu.append(&separator)?;
         menu.append(&exit_item)?;
@@ -75,6 +79,7 @@ impl TrayIcon {
                     let cmd = match event.id.0.as_str() {
                         "refresh" => Some(TrayCommand::RefreshNow),
                         "mode" => Some(TrayCommand::ToggleMode),
+                        "labels" => Some(TrayCommand::ToggleLabels),
                         "startup" => Some(TrayCommand::ToggleStartup),
                         "exit" => Some(TrayCommand::Exit),
                         _ => None,
@@ -92,6 +97,7 @@ impl TrayIcon {
             _tray: tray,
             menu_channel: rx,
             mode_item,
+            labels_item,
             startup_item,
         })
     }
@@ -103,6 +109,10 @@ impl TrayIcon {
         }
     }
 
+    fn labels_label(enabled: bool) -> &'static str {
+        if enabled { "✓ Show Labels" } else { "Show Labels" }
+    }
+
     fn startup_label(enabled: bool) -> &'static str {
         if enabled { "✓ Run on Startup" } else { "Run on Startup" }
     }
@@ -110,6 +120,11 @@ impl TrayIcon {
     /// Update the mode menu item text
     pub fn set_mode(&self, mode: MultiMonitorMode) {
         let _ = self.mode_item.set_text(Self::mode_label(mode));
+    }
+
+    /// Update the labels menu item text
+    pub fn set_labels(&self, enabled: bool) {
+        let _ = self.labels_item.set_text(Self::labels_label(enabled));
     }
 
     /// Update the startup menu item text
@@ -326,12 +341,13 @@ pub struct TrayIcon;
 
 #[cfg(not(windows))]
 impl TrayIcon {
-    pub fn new(_startup_enabled: bool, _mode: crate::monitor::MultiMonitorMode) -> anyhow::Result<Self> {
+    pub fn new(_startup_enabled: bool, _mode: crate::monitor::MultiMonitorMode, _labels_enabled: bool) -> anyhow::Result<Self> {
         tracing::warn!("System tray not supported on this platform");
         Ok(Self)
     }
 
     pub fn set_mode(&self, _mode: crate::monitor::MultiMonitorMode) {}
+    pub fn set_labels(&self, _enabled: bool) {}
     pub fn set_startup(&self, _enabled: bool) {}
 
     pub fn poll_command(&self) -> Option<TrayCommand> {

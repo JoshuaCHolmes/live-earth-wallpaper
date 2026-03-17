@@ -85,8 +85,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     tracing::info!("Run on startup: {}", if startup_enabled { "enabled" } else { "disabled" });
     tracing::info!("Monitor mode: {:?}", current_mode);
 
+    // Labels state
+    let mut show_labels = false;
+
     // Create tray icon
-    let tray = TrayIcon::new(startup_enabled, current_mode)?;
+    let tray = TrayIcon::new(startup_enabled, current_mode, show_labels)?;
     tracing::info!("System tray icon created");
 
     // Create async runtime
@@ -104,7 +107,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     // Initial update (full, with Earth fetch)
     tracing::info!("Performing initial wallpaper update...");
     let mut cached_earth: Option<(image::RgbaImage, chrono::DateTime<Utc>)> = None;
-    match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+    match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
         Ok((earth_img, timestamp)) => {
             cached_earth = Some((earth_img, timestamp));
         }
@@ -128,16 +131,16 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     );
 
     event_loop.run(move |_event, elwt| {
-        // Sleep briefly to avoid CPU spin while ensuring regular wakeups
-        std::thread::sleep(Duration::from_millis(500));
-        elwt.set_control_flow(ControlFlow::Poll);
+        elwt.set_control_flow(ControlFlow::WaitUntil(
+            std::time::Instant::now() + Duration::from_millis(500)
+        ));
 
         // Check for tray commands
         if let Some(cmd) = tray.poll_command() {
             match cmd {
                 TrayCommand::RefreshNow => {
                     tracing::info!("Manual refresh requested");
-                    match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+                    match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
                         Ok((earth_img, timestamp)) => {
                             cached_earth = Some((earth_img, timestamp));
                         }
@@ -155,6 +158,17 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     };
                     tray.set_mode(current_mode);
                     tracing::info!("Switched to {:?} mode (will apply on next refresh)", current_mode);
+                }
+                TrayCommand::ToggleLabels => {
+                    show_labels = !show_labels;
+                    tray.set_labels(show_labels);
+                    tracing::info!("Labels {}", if show_labels { "enabled" } else { "disabled" });
+                    // Immediate refresh to show/hide labels
+                    if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                        if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
+                            tracing::error!("Label refresh failed: {}", e);
+                        }
+                    }
                 }
                 TrayCommand::ToggleStartup => {
                     match startup::toggle() {
@@ -182,7 +196,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         // Check for full scheduled update (fetch new Earth image)
         if last_full_update.elapsed() >= full_update_interval {
             tracing::info!("Scheduled full update starting...");
-            match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+            match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
                 Ok((earth_img, timestamp)) => {
                     cached_earth = Some((earth_img, timestamp));
                 }
@@ -197,7 +211,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         else if last_star_refresh.elapsed() >= star_refresh_interval {
             if let Some((ref earth_img, ref timestamp)) = cached_earth {
                 tracing::info!("Star refresh (cached Earth from {})...", timestamp.format("%H:%M UTC"));
-                if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode)) {
+                if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
                     tracing::error!("Star refresh failed: {}", e);
                 }
             }
@@ -221,6 +235,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     rt.block_on(async {
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
+        let show_labels = false; // No tray on non-Windows, default off
 
         // Handle Ctrl+C on Unix
         tokio::spawn(async move {
@@ -236,7 +251,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
         // Initial update
         let mut cached_earth: Option<(image::RgbaImage, DateTime<Utc>)> = None;
-        match fetch_and_update_wallpaper(initial_mode).await {
+        match fetch_and_update_wallpaper(initial_mode, show_labels).await {
             Ok((earth_img, timestamp)) => {
                 cached_earth = Some((earth_img, timestamp));
             }
@@ -257,7 +272,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         break;
                     }
                     tracing::info!("Scheduled full update starting...");
-                    match fetch_and_update_wallpaper(initial_mode).await {
+                    match fetch_and_update_wallpaper(initial_mode, show_labels).await {
                         Ok((earth_img, timestamp)) => {
                             cached_earth = Some((earth_img, timestamp));
                         }
@@ -272,7 +287,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                     if let Some((ref earth_img, ref timestamp)) = cached_earth {
                         tracing::debug!("Star refresh...");
-                        if let Err(e) = render_with_cached_earth(earth_img, timestamp, initial_mode).await {
+                        if let Err(e) = render_with_cached_earth(earth_img, timestamp, initial_mode, show_labels).await {
                             tracing::error!("Star refresh failed: {}", e);
                         }
                     }
@@ -364,6 +379,7 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
 /// Fetch Earth image and update wallpaper, returning the Earth image for caching
 async fn fetch_and_update_wallpaper(
     mode: monitor::MultiMonitorMode,
+    show_labels: bool,
 ) -> Result<(image::RgbaImage, DateTime<Utc>)> {
     let start = std::time::Instant::now();
     
@@ -405,6 +421,7 @@ async fn fetch_and_update_wallpaper(
     // Render composite with current time for accurate star positions
     let render_time = Utc::now();
     let mut renderer = renderer::Renderer::new();
+    renderer.set_show_labels(show_labels);
     let wallpaper_image = renderer
         .render(&earth_image, &layout, mode, &render_time)
         .context("Failed to render wallpaper")?;
@@ -434,6 +451,7 @@ async fn render_with_cached_earth(
     earth_image: &image::RgbaImage,
     _earth_timestamp: &DateTime<Utc>,
     mode: monitor::MultiMonitorMode,
+    show_labels: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
     
@@ -445,6 +463,7 @@ async fn render_with_cached_earth(
     let render_time = Utc::now();
     
     let mut renderer = renderer::Renderer::new();
+    renderer.set_show_labels(show_labels);
     let wallpaper_image = renderer
         .render(earth_image, &layout, mode, &render_time)
         .context("Failed to render wallpaper")?;
