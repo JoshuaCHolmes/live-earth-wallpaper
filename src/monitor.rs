@@ -5,6 +5,16 @@
 
 use anyhow::Result;
 
+/// How to handle multiple monitors
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MultiMonitorMode {
+    /// Single image spans across all monitors (Earth centered on virtual desktop)
+    #[default]
+    Span,
+    /// Each monitor gets its own centered Earth view
+    Duplicate,
+}
+
 #[derive(Debug, Clone)]
 pub struct Monitor {
     pub x: i32,

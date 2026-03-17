@@ -195,6 +195,10 @@ fn run_with_tray() -> Result<()> {
 }
 
 async fn update_wallpaper() -> Result<()> {
+    update_wallpaper_with_mode(monitor::MultiMonitorMode::Span).await
+}
+
+async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<()> {
     let start = std::time::Instant::now();
     
     // Detect monitors
@@ -202,10 +206,11 @@ async fn update_wallpaper() -> Result<()> {
         .context("Failed to detect monitors")?;
     
     tracing::info!(
-        "Rendering for {}x{} desktop ({} monitor(s))",
+        "Rendering for {}x{} desktop ({} monitor(s), {:?} mode)",
         layout.total_width,
         layout.total_height,
-        layout.monitors.len()
+        layout.monitors.len(),
+        mode
     );
 
     // Create HTTP client
@@ -235,7 +240,7 @@ async fn update_wallpaper() -> Result<()> {
     tracing::info!("Rendering wallpaper...");
     let mut renderer = renderer::Renderer::new();
     let wallpaper_image = renderer
-        .render(&earth_image, layout.total_width, layout.total_height, &timestamp)
+        .render(&earth_image, &layout, mode, &timestamp)
         .context("Failed to render wallpaper")?;
 
     // Save to file
