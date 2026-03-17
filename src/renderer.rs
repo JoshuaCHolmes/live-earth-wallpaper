@@ -19,7 +19,7 @@ fn calculate_earth_angular_diameter() -> f64 {
 }
 
 /// Maximum star magnitude to render
-const MAX_STAR_MAGNITUDE: f64 = 6.5;
+const MAX_STAR_MAGNITUDE: f64 = 7.5;
 
 pub struct Renderer {
     star_catalog: StarCatalog,
@@ -291,7 +291,9 @@ fn draw_star_bounded(
     let canvas_w = canvas.width() as i32;
     let canvas_h = canvas.height() as i32;
     
-    let brightness = ((6.0 - magnitude) / 7.0).clamp(0.3, 1.0);
+    // Pogson's ratio: each magnitude step is 2.512× dimmer
+    // Reference: mag 4 = full brightness, dimmer stars fade according to ratio
+    let brightness = (2.512_f64).powf(4.0 - magnitude).clamp(0.12, 1.0);
     let ir = (radius * 2.0).ceil() as i32;
     
     // Viewport bounds in canvas coordinates

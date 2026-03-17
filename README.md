@@ -7,7 +7,8 @@ A native Windows application that displays live Himawari-8 satellite imagery of 
 ## Features
 
 - **Live Earth imagery** from the Himawari-8 geostationary satellite (140.7°E)
-- **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with 8,921 stars
+- **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with ~25,800 stars (mag ≤ 7.5)
+- **Smooth star updates** - stars refresh every 60 seconds, Earth image updates every 10 minutes
 - **Planet positions** calculated using NASA JPL orbital elements
 - **Moon phase and position** with realistic illumination
 - **Multi-monitor support** with two modes:
@@ -96,7 +97,7 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 | Data | Source |
 |------|--------|
 | Earth imagery | [NICT Himawari-8](https://himawari8.nict.go.jp/) (10-minute updates) |
-| Star catalog | [HYG Database v4.1](https://github.com/astronexus/HYG-Database) (mag ≤ 6.5) |
+| Star catalog | [HYG Database v4.1](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
 | Planet positions | [NASA JPL](https://ssd.jpl.nasa.gov/planets/approx_pos.html) orbital elements |
 | Moon position | Meeus lunar theory |
 
@@ -104,9 +105,11 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 
 | Setting | Value |
 |---------|-------|
-| Update interval | 10 minutes |
+| Full update interval | 10 minutes (Earth image fetch) |
+| Star refresh interval | 60 seconds (uses cached Earth) |
 | Earth image resolution | 4×4 tiles (2200×2200 px) |
-| Star magnitude limit | 6.5 (naked eye visibility) |
+| Star magnitude limit | 7.5 (~25,800 stars) |
+| Star brightness | Pogson's ratio: `2.512^(4.0 - mag)` |
 | Earth screen coverage | 60% of viewport height |
 
 ## Development
@@ -132,7 +135,7 @@ cargo build --release --target x86_64-pc-windows-gnu
 
 - Original concept: [Live-Space-View](https://github.com/JoshuaCHolmes/Live-Space-View) (Wallpaper Engine)
 - Satellite imagery: [NICT Science Cloud / Himawari-8](https://himawari8.nict.go.jp/)
-- Star data: [HYG Database](https://github.com/astronexus/HYG-Database) by David Nash
+- Star data: [HYG Database](https://codeberg.org/astronexus/hyg) by David Nash
 - Orbital elements: [NASA JPL Solar System Dynamics](https://ssd.jpl.nasa.gov/)
 
 ## License

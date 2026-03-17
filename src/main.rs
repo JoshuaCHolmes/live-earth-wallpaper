@@ -17,8 +17,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Update interval in minutes
-const UPDATE_INTERVAL_MINUTES: u64 = 10;
+/// Full update interval (fetch new Earth image) in minutes
+const FULL_UPDATE_INTERVAL_MINUTES: u64 = 10;
+
+/// Star-only refresh interval in seconds (uses cached Earth image)
+const STAR_REFRESH_INTERVAL_SECS: u64 = 60;
 
 /// Himawari-8 image resolution level
 const IMAGE_LEVEL: himawari::ImageLevel = himawari::ImageLevel::Level4;
@@ -98,26 +101,35 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         r.store(false, Ordering::SeqCst);
     })?;
 
-    // Initial update
+    // Initial update (full, with Earth fetch)
     tracing::info!("Performing initial wallpaper update...");
-    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
-        tracing::error!("Initial update failed: {}", e);
+    let mut cached_earth: Option<(image::RgbaImage, chrono::DateTime<Utc>)> = None;
+    match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+        Ok((earth_img, timestamp)) => {
+            cached_earth = Some((earth_img, timestamp));
+        }
+        Err(e) => {
+            tracing::error!("Initial update failed: {}", e);
+        }
     }
 
     // Create event loop for Windows message pump (required for tray)
     let event_loop = EventLoop::new()?;
     
-    let mut last_update = std::time::Instant::now();
-    let update_interval = Duration::from_secs(UPDATE_INTERVAL_MINUTES * 60);
+    let mut last_full_update = std::time::Instant::now();
+    let mut last_star_refresh = std::time::Instant::now();
+    let full_update_interval = Duration::from_secs(FULL_UPDATE_INTERVAL_MINUTES * 60);
+    let star_refresh_interval = Duration::from_secs(STAR_REFRESH_INTERVAL_SECS);
 
     tracing::info!(
-        "Wallpaper will update every {} minutes. Use tray icon to control.",
-        UPDATE_INTERVAL_MINUTES
+        "Full updates every {} min, star refresh every {} sec.",
+        FULL_UPDATE_INTERVAL_MINUTES,
+        STAR_REFRESH_INTERVAL_SECS
     );
 
     event_loop.run(move |_event, elwt| {
         elwt.set_control_flow(ControlFlow::WaitUntil(
-            std::time::Instant::now() + Duration::from_millis(100)
+            std::time::Instant::now() + Duration::from_millis(500)
         ));
 
         // Check for tray commands
@@ -125,10 +137,16 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
             match cmd {
                 TrayCommand::RefreshNow => {
                     tracing::info!("Manual refresh requested");
-                    if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
-                        tracing::error!("Refresh failed: {}", e);
+                    match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+                        Ok((earth_img, timestamp)) => {
+                            cached_earth = Some((earth_img, timestamp));
+                        }
+                        Err(e) => {
+                            tracing::error!("Refresh failed: {}", e);
+                        }
                     }
-                    last_update = std::time::Instant::now();
+                    last_full_update = std::time::Instant::now();
+                    last_star_refresh = std::time::Instant::now();
                 }
                 TrayCommand::ToggleMode => {
                     current_mode = match current_mode {
@@ -161,13 +179,29 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
             }
         }
 
-        // Check for scheduled update
-        if last_update.elapsed() >= update_interval {
-            tracing::info!("Scheduled update starting...");
-            if let Err(e) = rt.block_on(update_wallpaper_with_mode(current_mode)) {
-                tracing::error!("Scheduled update failed: {}", e);
+        // Check for full scheduled update (fetch new Earth image)
+        if last_full_update.elapsed() >= full_update_interval {
+            tracing::info!("Scheduled full update starting...");
+            match rt.block_on(fetch_and_update_wallpaper(current_mode)) {
+                Ok((earth_img, timestamp)) => {
+                    cached_earth = Some((earth_img, timestamp));
+                }
+                Err(e) => {
+                    tracing::error!("Scheduled update failed: {}", e);
+                }
             }
-            last_update = std::time::Instant::now();
+            last_full_update = std::time::Instant::now();
+            last_star_refresh = std::time::Instant::now();
+        }
+        // Check for star-only refresh (use cached Earth)
+        else if last_star_refresh.elapsed() >= star_refresh_interval {
+            if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                tracing::debug!("Star refresh...");
+                if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode)) {
+                    tracing::error!("Star refresh failed: {}", e);
+                }
+            }
+            last_star_refresh = std::time::Instant::now();
         }
 
         // Check for Ctrl+C
@@ -182,8 +216,6 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
 #[cfg(not(windows))]
 fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
-    use tokio::time::interval;
-
     let rt = tokio::runtime::Runtime::new()?;
     
     rt.block_on(async {
@@ -197,28 +229,54 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         });
 
         tracing::info!(
-            "Wallpaper will update every {} minutes. Press Ctrl+C to exit.",
-            UPDATE_INTERVAL_MINUTES
+            "Full updates every {} min, star refresh every {} sec.",
+            FULL_UPDATE_INTERVAL_MINUTES,
+            STAR_REFRESH_INTERVAL_SECS
         );
 
         // Initial update
-        if let Err(e) = update_wallpaper_with_mode(initial_mode).await {
-            tracing::error!("Initial update failed: {}", e);
+        let mut cached_earth: Option<(image::RgbaImage, DateTime<Utc>)> = None;
+        match fetch_and_update_wallpaper(initial_mode).await {
+            Ok((earth_img, timestamp)) => {
+                cached_earth = Some((earth_img, timestamp));
+            }
+            Err(e) => {
+                tracing::error!("Initial update failed: {}", e);
+            }
         }
 
-        let mut timer = interval(Duration::from_secs(UPDATE_INTERVAL_MINUTES * 60));
-        timer.tick().await;
+        let mut full_update_timer = tokio::time::interval(Duration::from_secs(FULL_UPDATE_INTERVAL_MINUTES * 60));
+        let mut star_refresh_timer = tokio::time::interval(Duration::from_secs(STAR_REFRESH_INTERVAL_SECS));
+        full_update_timer.tick().await;
+        star_refresh_timer.tick().await;
 
-        while running.load(Ordering::SeqCst) {
-            timer.tick().await;
-            
-            if !running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            tracing::info!("Scheduled update starting...");
-            if let Err(e) = update_wallpaper_with_mode(initial_mode).await {
-                tracing::error!("Scheduled update failed: {}", e);
+        loop {
+            tokio::select! {
+                _ = full_update_timer.tick() => {
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    tracing::info!("Scheduled full update starting...");
+                    match fetch_and_update_wallpaper(initial_mode).await {
+                        Ok((earth_img, timestamp)) => {
+                            cached_earth = Some((earth_img, timestamp));
+                        }
+                        Err(e) => {
+                            tracing::error!("Scheduled update failed: {}", e);
+                        }
+                    }
+                }
+                _ = star_refresh_timer.tick() => {
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                        tracing::debug!("Star refresh...");
+                        if let Err(e) = render_with_cached_earth(earth_img, timestamp, initial_mode).await {
+                            tracing::error!("Star refresh failed: {}", e);
+                        }
+                    }
+                }
             }
         }
 
@@ -299,6 +357,106 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
 
     let elapsed = start.elapsed();
     tracing::info!("Update complete in {:.1}s", elapsed.as_secs_f64());
+
+    Ok(())
+}
+
+/// Fetch Earth image and update wallpaper, returning the Earth image for caching
+async fn fetch_and_update_wallpaper(
+    mode: monitor::MultiMonitorMode,
+) -> Result<(image::RgbaImage, DateTime<Utc>)> {
+    let start = std::time::Instant::now();
+    
+    // Detect monitors
+    let layout = monitor::MonitorLayout::detect()
+        .context("Failed to detect monitors")?;
+    
+    tracing::info!(
+        "Rendering for {}x{} desktop ({} monitor(s), {:?} mode)",
+        layout.total_width,
+        layout.total_height,
+        layout.monitors.len(),
+        mode
+    );
+
+    // Create HTTP client
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    // Try to fetch Earth image, fall back to cached if available
+    let (mut earth_image, timestamp, is_cached) = fetch_earth_with_fallback(&client).await?;
+
+    // If using cached image, convert to grayscale to indicate stale data
+    if is_cached {
+        tracing::info!("Using cached image - converting to grayscale");
+        earth_image = convert_to_grayscale(&earth_image);
+    }
+
+    tracing::info!(
+        "Earth image: {}x{} from {}{}",
+        earth_image.width(),
+        earth_image.height(),
+        timestamp.format("%Y-%m-%d %H:%M UTC"),
+        if is_cached { " (cached)" } else { "" }
+    );
+
+    // Render composite with current time for accurate star positions
+    let render_time = Utc::now();
+    let mut renderer = renderer::Renderer::new();
+    let wallpaper_image = renderer
+        .render(&earth_image, &layout, mode, &render_time)
+        .context("Failed to render wallpaper")?;
+
+    // Save and set wallpaper
+    let wallpaper_dir = wallpaper::wallpaper_dir()?;
+    let wallpaper_path = wallpaper_dir.join("current_wallpaper.png");
+    wallpaper_image.save(&wallpaper_path).context("Failed to save wallpaper")?;
+    wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+
+    let elapsed = start.elapsed();
+    tracing::info!("Full update complete in {:.1}s", elapsed.as_secs_f64());
+
+    // Return the original (non-grayscale) earth image for caching
+    // Re-fetch if it was cached (grayscale), otherwise use what we have
+    if is_cached {
+        // Load the original cached image (not grayscale)
+        let (original, _) = load_cached_earth_image()?;
+        Ok((original, timestamp))
+    } else {
+        Ok((earth_image, timestamp))
+    }
+}
+
+/// Render wallpaper using cached Earth image with updated star positions
+async fn render_with_cached_earth(
+    earth_image: &image::RgbaImage,
+    _earth_timestamp: &DateTime<Utc>,
+    mode: monitor::MultiMonitorMode,
+) -> Result<()> {
+    let start = std::time::Instant::now();
+    
+    // Detect monitors
+    let layout = monitor::MonitorLayout::detect()
+        .context("Failed to detect monitors")?;
+
+    // Use current time for star positions
+    let render_time = Utc::now();
+    
+    let mut renderer = renderer::Renderer::new();
+    let wallpaper_image = renderer
+        .render(earth_image, &layout, mode, &render_time)
+        .context("Failed to render wallpaper")?;
+
+    // Save and set wallpaper
+    let wallpaper_dir = wallpaper::wallpaper_dir()?;
+    let wallpaper_path = wallpaper_dir.join("current_wallpaper.png");
+    wallpaper_image.save(&wallpaper_path).context("Failed to save wallpaper")?;
+    wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+
+    let elapsed = start.elapsed();
+    tracing::debug!("Star refresh complete in {:.1}ms", elapsed.as_millis());
 
     Ok(())
 }
