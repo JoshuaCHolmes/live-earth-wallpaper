@@ -3,6 +3,9 @@
 //! A native Windows application that displays live satellite imagery of Earth
 //! with an accurate star field as your desktop wallpaper.
 
+// Hide console window on Windows (GUI subsystem)
+#![windows_subsystem = "windows"]
+
 mod astronomy;
 mod himawari;
 mod monitor;

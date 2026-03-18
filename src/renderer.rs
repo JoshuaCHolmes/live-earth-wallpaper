@@ -385,7 +385,10 @@ fn draw_planet_bounded(
 ) {
     let canvas_w = canvas.width() as i32;
     let canvas_h = canvas.height() as i32;
-    let ir = (radius * 1.5).ceil() as i32;
+    
+    // Extend rendering area for glow effect
+    let glow_radius = radius * 2.5;
+    let ir = glow_radius.ceil() as i32;
     
     let vp_left = vp_x as i32;
     let vp_top = vp_y as i32;
@@ -402,10 +405,20 @@ fn draw_planet_bounded(
             {
                 let dist = ((dx * dx + dy * dy) as f64).sqrt();
                 
-                if dist <= radius {
+                let alpha = if dist <= radius {
+                    // Core: solid with anti-aliased edge
                     let edge = radius - dist;
-                    let alpha = if edge < 1.0 { (edge * 255.0) as u8 } else { 255 };
-                    
+                    if edge < 1.0 { (edge * 255.0) as u8 } else { 255 }
+                } else if dist <= glow_radius {
+                    // Glow: exponential falloff beyond core
+                    let glow_dist = (dist - radius) / (glow_radius - radius);
+                    let glow_intensity = (1.0 - glow_dist).powi(2) * 0.4;
+                    (glow_intensity * 255.0) as u8
+                } else {
+                    0
+                };
+                
+                if alpha > 0 {
                     let pixel = canvas.get_pixel_mut(px as u32, py as u32);
                     blend_pixel(pixel, &Rgba([r, g, b, 255]), alpha);
                 }
