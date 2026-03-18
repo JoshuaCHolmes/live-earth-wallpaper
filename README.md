@@ -8,15 +8,18 @@ A native Windows application that displays live Himawari-8 satellite imagery of 
 
 - **Live Earth imagery** from the Himawari-8 geostationary satellite (140.7°E)
 - **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with ~25,800 stars (mag ≤ 7.5)
-- **Smooth star updates** - stars refresh every 60 seconds, Earth image updates every 10 minutes
-- **Planet positions** calculated using NASA JPL orbital elements
-- **Moon phase and position** with realistic illumination
+- **Smooth updates** - stars/sun/moon/planets refresh every 60 seconds, Earth image updates every 10 minutes
+- **Realistic Rendering**:
+  - **Sun**: Gaussian-profile bright disk with smooth bloom
+  - **Moon**: Textured 3D sphere with accurate phase shading
+  - **Planets**: Point sources with correct color and magnitude-based brightness
+  - **Stars**: ~25,800 stars with accurate magnitude and color index
 - **Multi-monitor support** with two modes:
   - **Span**: Single continuous view across all monitors
   - **Duplicate**: Each monitor gets its own centered Earth view
 - **High-DPI aware** - renders at native resolution on scaled displays
 - **Offline fallback** - uses cached imagery (shown in grayscale) when network unavailable
-- **System tray** - minimal UI with refresh, mode toggle, and startup options
+- **System tray** - minimal UI with refresh, mode toggle, labels toggle, and startup options
 - **Lightweight** - ~6MB executable, ~15-30MB memory footprint
 
 ## Requirements
@@ -56,6 +59,7 @@ Run the application and it will:
 |--------|-------------|
 | **Refresh Now** | Immediately fetch new imagery and update wallpaper |
 | **Mode: Span/Duplicate** | Toggle between multi-monitor modes |
+| **Show Labels** | Toggle text labels for bright stars, planets, and Moon |
 | **Run on Startup** | Toggle automatic startup with Windows |
 | **Exit** | Close the application |
 
@@ -79,7 +83,14 @@ live-earth-wallpaper.exe --update-once --duplicate
 
 ### Field of View
 
-The wallpaper simulates the view from Himawari-8's position in geostationary orbit at 140.7°E longitude, 35,793 km above Earth. From this vantage point, Earth subtends ~17.4° of the sky. The star field, planets, and moon are positioned at their correct angular distances based on real astronomical calculations.
+The wallpaper simulates the view from space looking toward Earth at 140.7°E longitude (Himawari-8's position). The camera is placed at a virtual distance where Earth subtends 60% of the vertical field of view (~17.4° angular diameter).
+
+### Rendering Accuracy
+
+- **Perspective**: Correct gnomonic projection centered on the anti-satellite point (the sky behind Earth)
+- **Occlusion**: Celestial objects (Sun/Moon/Planets/Stars) are correctly hidden when behind Earth
+- **Sizes**: Sun and Moon rendered at correct angular diameters relative to FOV
+- **Lighting**: Sun position matches Earth's illumination phase
 
 ### Offline Mode
 
@@ -97,9 +108,10 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 | Data | Source |
 |------|--------|
 | Earth imagery | [NICT Himawari-8](https://himawari8.nict.go.jp/) (10-minute updates) |
-| Star catalog | [HYG Database v4.1](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
+| Star catalog | [HYG Database v4.2](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
 | Planet positions | [NASA JPL](https://ssd.jpl.nasa.gov/planets/approx_pos.html) orbital elements |
 | Moon position | Meeus lunar theory |
+| Moon texture | [NASA SVS](https://svs.gsfc.nasa.gov/4720/) (CGI Moon Kit) |
 
 ### Defaults
 
@@ -109,7 +121,7 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 | Star refresh interval | 60 seconds (uses cached Earth) |
 | Earth image resolution | 4×4 tiles (2200×2200 px) |
 | Star magnitude limit | 7.5 (~25,800 stars) |
-| Star brightness | Pogson's ratio: `2.512^(4.0 - mag)` |
+| Star brightness | Pogson's ratio relative to mag 5.75 |
 | Earth screen coverage | 60% of viewport height |
 
 ## Development
@@ -126,8 +138,10 @@ cargo build --release
 
 ```bash
 # Using mingw-w64 (NixOS example)
-nix-shell -p pkgsCross.mingwW64.stdenv.cc rustup
+nix-shell -p pkgsCross.mingwW64.stdenv.cc pkgsCross.mingwW64.windows.pthreads rustup
 rustup target add x86_64-pc-windows-gnu
+export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
 cargo build --release --target x86_64-pc-windows-gnu
 ```
 
@@ -137,6 +151,7 @@ cargo build --release --target x86_64-pc-windows-gnu
 - Satellite imagery: [NICT Science Cloud / Himawari-8](https://himawari8.nict.go.jp/)
 - Star data: [HYG Database](https://codeberg.org/astronexus/hyg) by David Nash
 - Orbital elements: [NASA JPL Solar System Dynamics](https://ssd.jpl.nasa.gov/)
+- Moon texture: [NASA SVS](https://svs.gsfc.nasa.gov/)
 
 ## License
 

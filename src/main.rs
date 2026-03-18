@@ -161,7 +161,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         MultiMonitorMode::Duplicate => MultiMonitorMode::Span,
                     };
                     tray.set_mode(current_mode);
-                    tracing::info!("Switched to {:?} mode (will apply on next refresh)", current_mode);
+                    tracing::info!("Switched to {:?} mode", current_mode);
+                    // Immediate refresh to apply mode change
+                    if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                        if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
+                            tracing::error!("Mode switch refresh failed: {}", e);
+                        }
+                    }
                 }
                 TrayCommand::ToggleLabels => {
                     show_labels = !show_labels;

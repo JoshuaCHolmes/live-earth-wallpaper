@@ -167,7 +167,12 @@ pub fn equatorial_to_screen(
     canvas_height: u32,
     fov_degrees: f64,
 ) -> ScreenPosition {
-    let lst = lst_degrees(dt, SATELLITE_LONGITUDE);
+    // We want the view looking TOWARD the satellite's longitude from space
+    // So we're looking at the longitude opposite to the sky we want to see
+    // The "center" of our sky view is (Satellite Longitude + 180 degrees)
+    let view_longitude = SATELLITE_LONGITUDE + 180.0;
+    
+    let lst = lst_degrees(dt, view_longitude);
     let ha = deg_to_rad(lst - eq.ra_degrees());
     let dec_rad = eq.dec_radians();
 
@@ -182,6 +187,7 @@ pub fn equatorial_to_screen(
     let fov_rad = deg_to_rad(fov_degrees);
     let scale = canvas_width.min(canvas_height) as f64 / (2.0 * (fov_rad / 2.0).tan());
 
+    // Normal projection: positive HA (west) is to the right on sky maps
     let screen_x = canvas_width as f64 / 2.0 + x * scale;
     let screen_y = canvas_height as f64 / 2.0 - y * scale;
 
@@ -191,4 +197,33 @@ pub fn equatorial_to_screen(
         && screen_y < canvas_height as f64;
 
     ScreenPosition::new(screen_x, screen_y, visible)
+}
+
+/// Calculate the Sun's geocentric equatorial coordinates
+pub fn sun_position(dt: &DateTime<Utc>) -> Equatorial {
+    let jd = julian_day(dt);
+    let n = jd - 2451545.0; // Days since J2000.0
+    
+    // Mean longitude and anomaly
+    let l = normalize_degrees(280.460 + 0.9856474 * n);
+    let g = normalize_degrees(357.528 + 0.9856003 * n);
+    let g_rad = deg_to_rad(g);
+    
+    // Ecliptic longitude (with equation of center)
+    let lambda = normalize_degrees(l + 1.915 * g_rad.sin() + 0.020 * (2.0 * g_rad).sin());
+    
+    // Ecliptic latitude is essentially 0 for the Sun
+    let ecliptic = Ecliptic::new(lambda, 0.0, 1.0);
+    ecliptic.to_equatorial(dt)
+}
+
+/// Get Sun's screen position
+pub fn sun_screen_position(
+    dt: &DateTime<Utc>,
+    width: u32,
+    height: u32,
+    fov: f64,
+) -> ScreenPosition {
+    let eq = sun_position(dt);
+    equatorial_to_screen(&eq, dt, width, height, fov)
 }

@@ -11,12 +11,39 @@ use image::{Rgba, RgbaImage};
 /// Fraction of the smaller dimension that Earth should occupy
 const EARTH_SCREEN_FRACTION: f64 = 0.6;
 
+/// Angular diameters in degrees (as seen from geostationary orbit / Earth's surface)
+const MOON_ANGULAR_DIAMETER: f64 = 0.52;  // ~31 arcminutes
+const SUN_ANGULAR_DIAMETER: f64 = 0.53;   // ~32 arcminutes
+
 /// Calculate the actual FOV that shows Earth at the correct angular size
 /// From geostationary orbit, Earth subtends ~17.4° 
 fn calculate_earth_angular_diameter() -> f64 {
     let distance_to_earth_center = SATELLITE_ALTITUDE_KM + EARTH_RADIUS_KM;
     let earth_angular_radius = (EARTH_RADIUS_KM / distance_to_earth_center).asin();
     earth_angular_radius.to_degrees() * 2.0
+}
+
+/// Calculate pixel radius for an object given its angular diameter and the viewport
+fn angular_to_pixel_radius(angular_diameter_deg: f64, fov_deg: f64, viewport_height: u32) -> f64 {
+    // Pixels per degree in this viewport
+    let pixels_per_degree = viewport_height as f64 / fov_deg;
+    // Convert angular diameter to pixel radius
+    (angular_diameter_deg * pixels_per_degree) / 2.0
+}
+
+/// Check if a screen position is occluded by Earth (within Earth's disk)
+fn is_occluded_by_earth(pos_x: f64, pos_y: f64, vp_w: u32, vp_h: u32) -> bool {
+    // Earth is centered in the viewport and occupies EARTH_SCREEN_FRACTION of height
+    let earth_radius_px = (vp_h as f64 * EARTH_SCREEN_FRACTION) / 2.0;
+    let center_x = vp_w as f64 / 2.0;
+    let center_y = vp_h as f64 / 2.0;
+    
+    let dx = pos_x - center_x;
+    let dy = pos_y - center_y;
+    let dist = (dx * dx + dy * dy).sqrt();
+    
+    // Add small margin to account for Earth's atmosphere/limb
+    dist < earth_radius_px * 1.02
 }
 
 /// Maximum star magnitude to render
@@ -97,6 +124,7 @@ impl Renderer {
 
         // Render celestial objects - use height for vertical FOV, width scales horizontally
         self.render_stars_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
+        self.render_sun_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
         self.render_planets_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
         self.render_moon_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
 
@@ -136,6 +164,10 @@ impl Renderer {
             
             // Render stars for this monitor's viewport
             self.render_stars_viewport(
+                &mut canvas, timestamp, fov,
+                canvas_x, canvas_y, monitor.width, monitor.height
+            );
+            self.render_sun_viewport(
                 &mut canvas, timestamp, fov,
                 canvas_x, canvas_y, monitor.width, monitor.height
             );
@@ -199,6 +231,39 @@ impl Renderer {
         }
     }
 
+    /// Render Sun into a viewport region
+    fn render_sun_viewport(
+        &self,
+        canvas: &mut RgbaImage,
+        dt: &DateTime<Utc>,
+        fov: f64,
+        vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32,
+    ) {
+        use crate::astronomy::coordinates::{sun_screen_position, sun_position};
+        
+        let sun_eq = sun_position(dt);
+        let pos = sun_screen_position(dt, vp_w, vp_h, fov);
+        
+        tracing::debug!(
+            "Sun: RA={:.2}h Dec={:.2}° pos=({:.1},{:.1}) visible={}",
+            sun_eq.ra, sun_eq.dec, pos.x, pos.y, pos.visible
+        );
+        
+        if pos.visible {
+            let radius = angular_to_pixel_radius(SUN_ANGULAR_DIAMETER, fov, vp_h).max(4.0);
+            
+            let cx = vp_x as i32 + pos.x as i32;
+            let cy = vp_y as i32 + pos.y as i32;
+            
+            draw_sun_bounded(canvas, cx, cy, radius, vp_x, vp_y, vp_w, vp_h);
+            
+            if self.show_labels {
+                let label_offset = (radius as i32) + 4;
+                draw_label(canvas, cx + label_offset, cy - 2, "Sun", 220, vp_x, vp_y, vp_w, vp_h);
+            }
+        }
+    }
+
     /// Render planets into a viewport region
     fn render_planets_viewport(
         &self,
@@ -210,8 +275,15 @@ impl Renderer {
         let visible = self.planetary_system.visible_planets(dt, vp_w, vp_h, fov, MAX_STAR_MAGNITUDE);
 
         for (planet, _eq, pos, mag) in visible {
+            // Skip if occluded by Earth
+            if is_occluded_by_earth(pos.x, pos.y, vp_w, vp_h) {
+                continue;
+            }
+            
             let (r, g, b) = planet.color;
-            let radius = magnitude_to_radius(mag, 2.0);
+            // Planets are point sources - use same formula as stars
+            let mag_factor = (6.0 - mag).max(0.3);
+            let radius = 1.5 * mag_factor.powf(0.5);
             
             let cx = vp_x as i32 + pos.x as i32;
             let cy = vp_y as i32 + pos.y as i32;
@@ -235,9 +307,9 @@ impl Renderer {
     ) {
         let pos = self.moon.screen_position(dt, vp_w, vp_h, fov);
         
-        if pos.visible {
+        if pos.visible && !is_occluded_by_earth(pos.x, pos.y, vp_w, vp_h) {
             let phase = self.moon.phase();
-            let radius = 8.0;
+            let radius = angular_to_pixel_radius(MOON_ANGULAR_DIAMETER, fov, vp_h).max(4.0);
             
             let cx = vp_x as i32 + pos.x as i32;
             let cy = vp_y as i32 + pos.y as i32;
@@ -250,7 +322,8 @@ impl Renderer {
             
             // Draw moon label
             if self.show_labels {
-                draw_label(canvas, cx + 12, cy - 2, "Moon", 220, vp_x, vp_y, vp_w, vp_h);
+                let label_offset = (radius as i32) + 4;
+                draw_label(canvas, cx + label_offset, cy - 2, "Moon", 220, vp_x, vp_y, vp_w, vp_h);
             }
         }
     }
@@ -375,7 +448,7 @@ fn draw_star_bounded(
     }
 }
 
-/// Draw a planet with bounds checking
+/// Draw a planet as a simple point source (like a star)
 fn draw_planet_bounded(
     canvas: &mut RgbaImage,
     cx: i32, cy: i32,
@@ -385,10 +458,7 @@ fn draw_planet_bounded(
 ) {
     let canvas_w = canvas.width() as i32;
     let canvas_h = canvas.height() as i32;
-    
-    // Extend rendering area for glow effect
-    let glow_radius = radius * 2.5;
-    let ir = glow_radius.ceil() as i32;
+    let ir = (radius + 1.0).ceil() as i32;
     
     let vp_left = vp_x as i32;
     let vp_top = vp_y as i32;
@@ -405,22 +475,15 @@ fn draw_planet_bounded(
             {
                 let dist = ((dx * dx + dy * dy) as f64).sqrt();
                 
-                let alpha = if dist <= radius {
-                    // Core: solid with anti-aliased edge
-                    let edge = radius - dist;
-                    if edge < 1.0 { (edge * 255.0) as u8 } else { 255 }
-                } else if dist <= glow_radius {
-                    // Glow: exponential falloff beyond core
-                    let glow_dist = (dist - radius) / (glow_radius - radius);
-                    let glow_intensity = (1.0 - glow_dist).powi(2) * 0.4;
-                    (glow_intensity * 255.0) as u8
-                } else {
-                    0
-                };
-                
-                if alpha > 0 {
-                    let pixel = canvas.get_pixel_mut(px as u32, py as u32);
-                    blend_pixel(pixel, &Rgba([r, g, b, 255]), alpha);
+                if dist <= radius + 1.0 {
+                    // Simple falloff - bright center fading to edge
+                    let intensity = (1.0 - dist / (radius + 1.0)).max(0.0);
+                    let alpha = (intensity * intensity * 255.0) as u8;
+                    
+                    if alpha > 0 {
+                        let pixel = canvas.get_pixel_mut(px as u32, py as u32);
+                        blend_pixel(pixel, &Rgba([r, g, b, 255]), alpha);
+                    }
                 }
             }
         }
@@ -574,11 +637,55 @@ fn draw_moon_bounded(
     }
 }
 
-/// Convert magnitude to display radius
-fn magnitude_to_radius(mag: f64, base: f64) -> f64 {
-    let factor = (4.0 - mag).max(0.5);
-    base * factor.powf(0.4)
+/// Draw Sun - Gaussian-like bright center with smooth falloff
+fn draw_sun_bounded(
+    canvas: &mut RgbaImage,
+    cx: i32, cy: i32,
+    radius: f64,
+    vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32,
+) {
+    let canvas_w = canvas.width() as i32;
+    let canvas_h = canvas.height() as i32;
+    
+    // Render area extends to where intensity drops to near zero
+    let render_radius = radius * 2.0;
+    let ir = render_radius.ceil() as i32;
+    
+    let vp_left = vp_x as i32;
+    let vp_top = vp_y as i32;
+    let vp_right = vp_left + vp_w as i32;
+    let vp_bottom = vp_top + vp_h as i32;
+    
+    // Bright white/yellow-white
+    let sun_color = Rgba([255, 252, 240, 255]);
+    
+    // Gaussian sigma - controls how quickly brightness falls off
+    // Smaller = sharper center, larger = more spread
+    let sigma = radius * 0.6;
+    
+    for dy in -ir..=ir {
+        for dx in -ir..=ir {
+            let px = cx + dx;
+            let py = cy + dy;
+            
+            if px >= 0 && px < canvas_w && py >= 0 && py < canvas_h
+               && px >= vp_left && px < vp_right && py >= vp_top && py < vp_bottom
+            {
+                let dist = ((dx * dx + dy * dy) as f64).sqrt();
+                
+                // Gaussian falloff: e^(-dist²/2σ²)
+                let intensity = (-dist * dist / (2.0 * sigma * sigma)).exp();
+                let alpha = (intensity * 255.0) as u8;
+                
+                if alpha > 0 {
+                    let pixel = canvas.get_pixel_mut(px as u32, py as u32);
+                    blend_pixel(pixel, &sun_color, alpha);
+                }
+            }
+        }
+    }
 }
+
 
 /// Alpha blend a source pixel onto destination
 fn blend_pixel(dst: &mut Rgba<u8>, src: &Rgba<u8>, alpha: u8) {

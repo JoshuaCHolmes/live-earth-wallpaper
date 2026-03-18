@@ -7,7 +7,6 @@
 // Format: (RA hours, Dec degrees, magnitude, B-V color index, label)
 
 pub const STAR_DATA: &[(f64, f64, f64, f64, Option<&str>)] = &[
-    (0.000000, 0.000000, -26.70, 0.66, Some("Sol")),
     (6.752481, -16.716116, -1.44, 0.01, Some("Sirius")),
     (6.399195, -52.695660, -0.62, 0.16, Some("Canopus")),
     (14.261030, 19.182410, -0.05, 1.24, Some("Arcturus")),
