@@ -6,6 +6,7 @@
 mod astronomy;
 mod himawari;
 mod monitor;
+mod moon_texture;
 mod renderer;
 mod tray;
 mod wallpaper;

@@ -3,6 +3,7 @@
 use crate::astronomy::{Moon, PlanetarySystem, StarCatalog};
 use crate::astronomy::coordinates::{SATELLITE_ALTITUDE_KM, EARTH_RADIUS_KM};
 use crate::monitor::{MonitorLayout, MultiMonitorMode};
+use crate::moon_texture::MOON_TEXTURE_PNG;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use image::{Rgba, RgbaImage};
@@ -25,6 +26,7 @@ pub struct Renderer {
     star_catalog: StarCatalog,
     planetary_system: PlanetarySystem,
     moon: Moon,
+    moon_texture: Option<RgbaImage>,
     show_labels: bool,
 }
 
@@ -33,10 +35,20 @@ impl Renderer {
         let mut star_catalog = StarCatalog::new(MAX_STAR_MAGNITUDE);
         star_catalog.load_embedded();
         
+        // Load moon texture
+        let moon_texture = image::load_from_memory(MOON_TEXTURE_PNG)
+            .ok()
+            .map(|img| img.to_rgba8());
+        
+        if moon_texture.is_some() {
+            tracing::debug!("Loaded moon texture");
+        }
+        
         Self {
             star_catalog,
             planetary_system: PlanetarySystem::new(),
             moon: Moon::new(),
+            moon_texture,
             show_labels: false,
         }
     }
@@ -230,7 +242,11 @@ impl Renderer {
             let cx = vp_x as i32 + pos.x as i32;
             let cy = vp_y as i32 + pos.y as i32;
             
-            draw_moon_bounded(canvas, cx, cy, radius, phase, vp_x, vp_y, vp_w, vp_h);
+            if let Some(ref texture) = self.moon_texture {
+                draw_moon_textured(canvas, cx, cy, radius, phase, texture, vp_x, vp_y, vp_w, vp_h);
+            } else {
+                draw_moon_bounded(canvas, cx, cy, radius, phase, vp_x, vp_y, vp_w, vp_h);
+            }
             
             // Draw moon label
             if self.show_labels {
@@ -323,8 +339,9 @@ fn draw_star_bounded(
     let canvas_h = canvas.height() as i32;
     
     // Pogson's ratio: each magnitude step is 2.512× dimmer
-    // Reference: mag 4 = full brightness, dimmer stars fade according to ratio
-    let brightness = (2.512_f64).powf(4.0 - magnitude).clamp(0.12, 1.0);
+    // Reference point (5.75) chosen so mag 7.5 ≈ 20% brightness
+    // This preserves accurate relative brightness while scaling for screen visibility
+    let brightness = (2.512_f64).powf(5.75 - magnitude).clamp(0.0, 1.0);
     let ir = (radius * 2.0).ceil() as i32;
     
     // Viewport bounds in canvas coordinates
@@ -397,7 +414,97 @@ fn draw_planet_bounded(
     }
 }
 
-/// Draw moon with phase and bounds checking
+/// Draw moon with texture and phase shading
+fn draw_moon_textured(
+    canvas: &mut RgbaImage,
+    cx: i32, cy: i32,
+    radius: f64,
+    phase: f64,
+    texture: &RgbaImage,
+    vp_x: u32, vp_y: u32, vp_w: u32, vp_h: u32,
+) {
+    let canvas_w = canvas.width() as i32;
+    let canvas_h = canvas.height() as i32;
+    let ir = radius.ceil() as i32;
+    let tex_w = texture.width() as f64;
+    let tex_h = texture.height() as f64;
+    
+    let vp_left = vp_x as i32;
+    let vp_top = vp_y as i32;
+    let vp_right = vp_left + vp_w as i32;
+    let vp_bottom = vp_top + vp_h as i32;
+    
+    for dy in -ir..=ir {
+        for dx in -ir..=ir {
+            let px = cx + dx;
+            let py = cy + dy;
+            
+            if px >= 0 && px < canvas_w && py >= 0 && py < canvas_h
+               && px >= vp_left && px < vp_right && py >= vp_top && py < vp_bottom
+            {
+                let dist = ((dx * dx + dy * dy) as f64).sqrt();
+                
+                if dist <= radius {
+                    // Map screen position to sphere surface
+                    let nx = dx as f64 / radius; // -1 to 1
+                    let ny = dy as f64 / radius; // -1 to 1
+                    
+                    // z coordinate on unit sphere (front face)
+                    let nz_sq = 1.0 - nx * nx - ny * ny;
+                    if nz_sq < 0.0 { continue; }
+                    let nz = nz_sq.sqrt();
+                    
+                    // Convert to spherical coordinates for texture lookup
+                    // Latitude: -90 to 90 from top to bottom
+                    // Longitude: 0 to 360 around equator
+                    let lat = ny.asin(); // -π/2 to π/2
+                    let lon = nx.atan2(nz); // -π to π (centered on front)
+                    
+                    // Map to texture coordinates
+                    // Texture is equirectangular: lon maps to x (0-360), lat maps to y (90 to -90)
+                    let u = (lon + std::f64::consts::PI) / (2.0 * std::f64::consts::PI); // 0 to 1
+                    let v = 0.5 - lat / std::f64::consts::PI; // 0 to 1 (top to bottom)
+                    
+                    let tex_x = ((u * tex_w) as u32).min(texture.width() - 1);
+                    let tex_y = ((v * tex_h) as u32).min(texture.height() - 1);
+                    
+                    let tex_pixel = texture.get_pixel(tex_x, tex_y);
+                    
+                    // Apply phase shading (terminator)
+                    // nx is the normalized x position (-1 left to +1 right)
+                    let lit = if phase < 0.5 {
+                        // Waxing: right side lit first, terminator moves left
+                        let terminator = 1.0 - phase * 4.0; // 1 to -1
+                        nx > terminator
+                    } else {
+                        // Waning: left side stays lit, terminator moves right
+                        let terminator = (phase - 0.5) * 4.0 - 1.0; // -1 to 1
+                        nx < terminator
+                    };
+                    
+                    // Brightness based on illumination
+                    let phase_brightness = if lit { 1.0 } else { 0.1 };
+                    
+                    // Apply edge falloff for anti-aliasing
+                    let edge = radius - dist;
+                    let edge_alpha = if edge < 1.0 { edge } else { 1.0 };
+                    
+                    let r = (tex_pixel[0] as f64 * phase_brightness * edge_alpha) as u8;
+                    let g = (tex_pixel[1] as f64 * phase_brightness * edge_alpha) as u8;
+                    let b = (tex_pixel[2] as f64 * phase_brightness * edge_alpha) as u8;
+                    let a = (255.0 * edge_alpha) as u8;
+                    
+                    if a > 0 {
+                        let pixel = canvas.get_pixel_mut(px as u32, py as u32);
+                        blend_pixel(pixel, &Rgba([r, g, b, 255]), a);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Draw moon with phase and bounds checking (fallback without texture)
 fn draw_moon_bounded(
     canvas: &mut RgbaImage,
     cx: i32, cy: i32,
