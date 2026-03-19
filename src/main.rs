@@ -111,12 +111,15 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     // Initial update (full, with Earth fetch)
     tracing::info!("Performing initial wallpaper update...");
     let mut cached_earth: Option<(image::RgbaImage, chrono::DateTime<Utc>)> = None;
+    let mut is_stale = false;
     match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
-        Ok((earth_img, timestamp)) => {
+        Ok((earth_img, timestamp, stale)) => {
             cached_earth = Some((earth_img, timestamp));
+            is_stale = stale;
         }
         Err(e) => {
             tracing::error!("Initial update failed: {}", e);
+            is_stale = true;
         }
     }
 
@@ -145,11 +148,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 TrayCommand::RefreshNow => {
                     tracing::info!("Manual refresh requested");
                     match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
-                        Ok((earth_img, timestamp)) => {
+                        Ok((earth_img, timestamp, stale)) => {
                             cached_earth = Some((earth_img, timestamp));
+                            is_stale = stale;
                         }
                         Err(e) => {
                             tracing::error!("Refresh failed: {}", e);
+                            is_stale = true;
                         }
                     }
                     last_full_update = std::time::Instant::now();
@@ -207,19 +212,42 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         if last_full_update.elapsed() >= full_update_interval {
             tracing::info!("Scheduled full update starting...");
             match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
-                Ok((earth_img, timestamp)) => {
+                Ok((earth_img, timestamp, stale)) => {
                     cached_earth = Some((earth_img, timestamp));
+                    is_stale = stale;
                 }
                 Err(e) => {
                     tracing::error!("Scheduled update failed: {}", e);
+                    is_stale = true;
                 }
             }
             last_full_update = std::time::Instant::now();
             last_star_refresh = std::time::Instant::now();
         }
-        // Check for star-only refresh (use cached Earth)
+        // Check for star-only refresh (use cached Earth) - retry full fetch if stale
         else if last_star_refresh.elapsed() >= star_refresh_interval {
-            if let Some((ref earth_img, ref timestamp)) = cached_earth {
+            if is_stale {
+                // We're using stale data - try to fetch fresh Earth image
+                tracing::info!("Stale data detected, attempting to fetch fresh Earth image...");
+                match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels)) {
+                    Ok((earth_img, timestamp, stale)) => {
+                        cached_earth = Some((earth_img, timestamp));
+                        is_stale = stale;
+                        if !stale {
+                            tracing::info!("Successfully recovered from stale state!");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Still unable to fetch fresh image: {}", e);
+                        // Fall back to star refresh with cached (grayscale) image
+                        if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                            if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
+                                tracing::error!("Star refresh failed: {}", e);
+                            }
+                        }
+                    }
+                }
+            } else if let Some((ref earth_img, ref timestamp)) = cached_earth {
                 tracing::info!("Star refresh (cached Earth from {})...", timestamp.format("%H:%M UTC"));
                 if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
                     tracing::error!("Star refresh failed: {}", e);
@@ -261,12 +289,15 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
         // Initial update
         let mut cached_earth: Option<(image::RgbaImage, DateTime<Utc>)> = None;
+        let mut is_stale = false;
         match fetch_and_update_wallpaper(initial_mode, show_labels).await {
-            Ok((earth_img, timestamp)) => {
+            Ok((earth_img, timestamp, stale)) => {
                 cached_earth = Some((earth_img, timestamp));
+                is_stale = stale;
             }
             Err(e) => {
                 tracing::error!("Initial update failed: {}", e);
+                is_stale = true;
             }
         }
 
@@ -283,11 +314,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                     tracing::info!("Scheduled full update starting...");
                     match fetch_and_update_wallpaper(initial_mode, show_labels).await {
-                        Ok((earth_img, timestamp)) => {
+                        Ok((earth_img, timestamp, stale)) => {
                             cached_earth = Some((earth_img, timestamp));
+                            is_stale = stale;
                         }
                         Err(e) => {
                             tracing::error!("Scheduled update failed: {}", e);
+                            is_stale = true;
                         }
                     }
                 }
@@ -295,7 +328,21 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     if !running.load(Ordering::SeqCst) {
                         break;
                     }
-                    if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                    if is_stale {
+                        // Try to recover from stale state
+                        match fetch_and_update_wallpaper(initial_mode, show_labels).await {
+                            Ok((earth_img, timestamp, stale)) => {
+                                cached_earth = Some((earth_img, timestamp));
+                                is_stale = stale;
+                            }
+                            Err(_) => {
+                                // Keep using cached image
+                                if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                                    let _ = render_with_cached_earth(earth_img, timestamp, initial_mode, show_labels).await;
+                                }
+                            }
+                        }
+                    } else if let Some((ref earth_img, ref timestamp)) = cached_earth {
                         tracing::debug!("Star refresh...");
                         if let Err(e) = render_with_cached_earth(earth_img, timestamp, initial_mode, show_labels).await {
                             tracing::error!("Star refresh failed: {}", e);
@@ -387,10 +434,11 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
 }
 
 /// Fetch Earth image and update wallpaper, returning the Earth image for caching
+/// Fetch and update wallpaper, returning (earth_image, timestamp, is_stale)
 async fn fetch_and_update_wallpaper(
     mode: monitor::MultiMonitorMode,
     show_labels: bool,
-) -> Result<(image::RgbaImage, DateTime<Utc>)> {
+) -> Result<(image::RgbaImage, DateTime<Utc>, bool)> {
     let start = std::time::Instant::now();
     
     // Detect monitors
@@ -445,14 +493,14 @@ async fn fetch_and_update_wallpaper(
     let elapsed = start.elapsed();
     tracing::info!("Full update complete in {:.1}s", elapsed.as_secs_f64());
 
-    // Return the original (non-grayscale) earth image for caching
+    // Return the original (non-grayscale) earth image for caching, plus stale flag
     // Re-fetch if it was cached (grayscale), otherwise use what we have
     if is_cached {
         // Load the original cached image (not grayscale)
         let (original, _) = load_cached_earth_image()?;
-        Ok((original, timestamp))
+        Ok((original, timestamp, true))
     } else {
-        Ok((earth_image, timestamp))
+        Ok((earth_image, timestamp, false))
     }
 }
 

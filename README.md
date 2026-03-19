@@ -94,7 +94,7 @@ The wallpaper simulates the view from space looking toward Earth at 140.7°E lon
 
 ### Offline Mode
 
-If the satellite imagery cannot be fetched (no internet, server issues), the application falls back to a cached image. **Cached images are displayed in grayscale** to visually indicate that the view is not live.
+If the satellite imagery cannot be fetched (no internet, server issues), the application falls back to a cached image. **Cached images are displayed in grayscale** to visually indicate that the view is not live. When in this "stale" state, the application automatically retries fetching fresh imagery every 60 seconds until connectivity is restored.
 
 ### Multi-Monitor Modes
 
