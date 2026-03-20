@@ -510,6 +510,13 @@ fn draw_moon_textured(
     let vp_right = vp_left + vp_w as i32;
     let vp_bottom = vp_top + vp_h as i32;
     
+    // Convert phase (0-1) to sun direction angle
+    // Phase 0 = new moon (sun behind), 0.5 = full moon (sun in front)
+    // The sun angle determines where the terminator falls on the sphere
+    let sun_angle = (1.0 - phase) * std::f64::consts::PI * 2.0 - std::f64::consts::PI;
+    let sun_x = sun_angle.sin(); // Sun direction x component
+    let sun_z = sun_angle.cos(); // Sun direction z component
+    
     for dy in -ir..=ir {
         for dx in -ir..=ir {
             let px = cx + dx;
@@ -546,20 +553,19 @@ fn draw_moon_textured(
                     
                     let tex_pixel = texture.get_pixel(tex_x, tex_y);
                     
-                    // Apply phase shading (terminator)
-                    // nx is the normalized x position (-1 left to +1 right)
-                    let lit = if phase < 0.5 {
-                        // Waxing: right side lit first, terminator moves left
-                        let terminator = 1.0 - phase * 4.0; // 1 to -1
-                        nx > terminator
-                    } else {
-                        // Waning: left side stays lit, terminator moves right
-                        let terminator = (phase - 0.5) * 4.0 - 1.0; // -1 to 1
-                        nx < terminator
-                    };
+                    // Calculate illumination using dot product with sun direction
+                    // This creates proper spherical terminator (crescent shape)
+                    let illumination = nx * sun_x + nz * sun_z;
                     
-                    // Brightness based on illumination
-                    let phase_brightness = if lit { 1.0 } else { 0.1 };
+                    // Smooth transition at terminator for realistic appearance
+                    let phase_brightness = if illumination > 0.05 {
+                        1.0
+                    } else if illumination > -0.05 {
+                        // Smooth transition across terminator
+                        (illumination + 0.05) / 0.1 * 0.9 + 0.1
+                    } else {
+                        0.1 // Dark side
+                    };
                     
                     // Apply edge falloff for anti-aliasing
                     let edge = radius - dist;
@@ -598,6 +604,11 @@ fn draw_moon_bounded(
     let vp_right = vp_left + vp_w as i32;
     let vp_bottom = vp_top + vp_h as i32;
     
+    // Convert phase to sun direction (same as textured version)
+    let sun_angle = (1.0 - phase) * std::f64::consts::PI * 2.0 - std::f64::consts::PI;
+    let sun_x = sun_angle.sin();
+    let sun_z = sun_angle.cos();
+    
     for dy in -ir..=ir {
         for dx in -ir..=ir {
             let px = cx + dx;
@@ -609,17 +620,22 @@ fn draw_moon_bounded(
                 let dist = ((dx * dx + dy * dy) as f64).sqrt();
                 
                 if dist <= radius {
-                    let normalized_x = dx as f64 / radius;
+                    let nx = dx as f64 / radius;
+                    let ny = dy as f64 / radius;
+                    let nz_sq = 1.0 - nx * nx - ny * ny;
+                    if nz_sq < 0.0 { continue; }
+                    let nz = nz_sq.sqrt();
                     
-                    let lit = if phase < 0.5 {
-                        let terminator = 1.0 - phase * 4.0;
-                        normalized_x > terminator
+                    // Spherical illumination
+                    let illumination = nx * sun_x + nz * sun_z;
+                    let brightness = if illumination > 0.05 {
+                        1.0
+                    } else if illumination > -0.05 {
+                        (illumination + 0.05) / 0.1 * 0.9 + 0.1
                     } else {
-                        let terminator = (phase - 0.5) * 4.0 - 1.0;
-                        normalized_x < terminator
+                        0.1
                     };
                     
-                    let brightness = if lit { 1.0 } else { 0.1 };
                     let edge = radius - dist;
                     let alpha = if edge < 1.0 { 
                         (edge * 255.0 * brightness) as u8 
