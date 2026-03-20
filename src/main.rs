@@ -31,6 +31,28 @@ const STAR_REFRESH_INTERVAL_SECS: u64 = 60;
 const IMAGE_LEVEL: himawari::ImageLevel = himawari::ImageLevel::Level4;
 
 fn main() -> Result<()> {
+    // Ensure single instance using a named mutex
+    #[cfg(windows)]
+    let _mutex = {
+        use windows::core::PCSTR;
+        use windows::Win32::Foundation::GetLastError;
+        use windows::Win32::System::Threading::CreateMutexA;
+        
+        let mutex_name = b"Global\\LiveEarthWallpaper\0";
+        let mutex = unsafe { CreateMutexA(None, true, PCSTR(mutex_name.as_ptr())) };
+        
+        if let Ok(handle) = mutex {
+            // Check if mutex already existed (another instance is running)
+            if unsafe { GetLastError() } == windows::Win32::Foundation::ERROR_ALREADY_EXISTS {
+                // Another instance is running - exit silently
+                return Ok(());
+            }
+            Some(handle)
+        } else {
+            None // Couldn't create mutex, continue anyway
+        }
+    };
+
     // Enable per-monitor DPI awareness for accurate high-DPI rendering
     // Must be called before any window/GUI operations
     #[cfg(windows)]
