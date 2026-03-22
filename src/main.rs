@@ -101,6 +101,7 @@ fn run_single_update(mode: MultiMonitorMode) -> Result<()> {
 #[cfg(windows)]
 fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     use tray::{startup, TrayCommand, TrayIcon};
+    use winit::event::Event;
     use winit::event_loop::{ControlFlow, EventLoop};
 
     // Current mode (mutable)
@@ -129,6 +130,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
     })?;
+
+    // Track current monitor layout for change detection
+    let mut current_layout = monitor::MonitorLayout::detect()
+        .map(|l| (l.monitors.len(), l.total_width, l.total_height))
+        .unwrap_or((1, 1920, 1080));
 
     // Initial update (full, with Earth fetch)
     tracing::info!("Performing initial wallpaper update...");
@@ -159,10 +165,37 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         STAR_REFRESH_INTERVAL_SECS
     );
 
-    event_loop.run(move |_event, elwt| {
+    event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::WaitUntil(
             std::time::Instant::now() + Duration::from_millis(500)
         ));
+
+        // Check for display configuration changes (monitor added/removed/resized)
+        if matches!(event, Event::UserEvent(_) | Event::MemoryWarning | Event::Resumed) {
+            // These events can indicate system state changes, check monitor layout
+        }
+        
+        // Periodically check if monitor configuration changed (every poll cycle)
+        // This catches WM_DISPLAYCHANGE indirectly via layout detection
+        if let Ok(new_layout) = monitor::MonitorLayout::detect() {
+            let new_state = (new_layout.monitors.len(), new_layout.total_width, new_layout.total_height);
+            if new_state != current_layout {
+                tracing::info!(
+                    "Monitor configuration changed: {} monitor(s), {}x{} -> {} monitor(s), {}x{}",
+                    current_layout.0, current_layout.1, current_layout.2,
+                    new_state.0, new_state.1, new_state.2
+                );
+                current_layout = new_state;
+                
+                // Re-render with new monitor configuration
+                if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                    tracing::info!("Re-rendering wallpaper for new display configuration...");
+                    if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels)) {
+                        tracing::error!("Display change re-render failed: {}", e);
+                    }
+                }
+            }
+        }
 
         // Check for tray commands
         if let Some(cmd) = tray.poll_command() {

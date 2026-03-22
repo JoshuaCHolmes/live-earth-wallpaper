@@ -142,12 +142,42 @@ impl TrayIcon {
 fn create_icon() -> anyhow::Result<tray_icon::Icon> {
     use anyhow::Context;
     
-    // Create a simple 16x16 blue/green earth-like icon
+    // Create a clean 16x16 Earth icon with visible continents
     let size = 16u32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     
     let center = size as f32 / 2.0;
-    let radius = center - 1.0;
+    let radius = center - 1.5;
+    
+    // Define continent-like regions (simplified shapes)
+    let is_land = |x: f32, y: f32| -> bool {
+        // Normalize to -1..1 from center
+        let nx = (x - center) / radius;
+        let ny = (y - center) / radius;
+        
+        // Simple continent approximations
+        // North America (upper left quadrant)
+        if nx < -0.1 && nx > -0.8 && ny < -0.1 && ny > -0.7 {
+            return true;
+        }
+        // South America (lower left)
+        if nx < 0.0 && nx > -0.5 && ny > 0.1 && ny < 0.8 {
+            return true;
+        }
+        // Europe/Africa (center-right)
+        if nx > -0.1 && nx < 0.4 && ny > -0.6 && ny < 0.7 {
+            return true;
+        }
+        // Asia (upper right)
+        if nx > 0.2 && nx < 0.8 && ny < 0.0 && ny > -0.6 {
+            return true;
+        }
+        // Australia (lower right)
+        if nx > 0.4 && nx < 0.8 && ny > 0.3 && ny < 0.6 {
+            return true;
+        }
+        false
+    };
     
     for y in 0..size {
         for x in 0..size {
@@ -156,22 +186,31 @@ fn create_icon() -> anyhow::Result<tray_icon::Icon> {
             let dist = (dx * dx + dy * dy).sqrt();
             
             if dist <= radius {
-                // Inside circle - blue/green earth colors
-                let angle = dy.atan2(dx);
-                let normalized_dist = dist / radius;
+                // Inside circle
+                let dist_ratio = dist / radius;
                 
-                // Create some "continent" patterns
-                let pattern = ((angle * 3.0).sin() * (normalized_dist * 5.0).cos()).abs();
+                // Add subtle shading (darker at edges for 3D effect)
+                let shade = 1.0 - (dist_ratio * 0.3);
                 
-                if pattern > 0.5 {
-                    // Land (green)
-                    rgba.extend_from_slice(&[34, 139, 34, 255]);
+                if is_land(x as f32, y as f32) {
+                    // Land - green with shading
+                    let g = (100.0 * shade) as u8;
+                    let r = (60.0 * shade) as u8;
+                    let b = (40.0 * shade) as u8;
+                    rgba.extend_from_slice(&[r, g, b, 255]);
                 } else {
-                    // Ocean (blue)
-                    rgba.extend_from_slice(&[30, 90, 180, 255]);
+                    // Ocean - deep blue with shading
+                    let b = (180.0 * shade) as u8;
+                    let g = (100.0 * shade) as u8;
+                    let r = (40.0 * shade) as u8;
+                    rgba.extend_from_slice(&[r, g, b, 255]);
                 }
+            } else if dist <= radius + 1.0 {
+                // Subtle atmosphere glow at edge
+                let alpha = ((radius + 1.0 - dist) * 128.0) as u8;
+                rgba.extend_from_slice(&[100, 150, 255, alpha]);
             } else {
-                // Outside circle - transparent
+                // Outside - transparent
                 rgba.extend_from_slice(&[0, 0, 0, 0]);
             }
         }
