@@ -431,9 +431,11 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
         mode
     );
 
-    // Create HTTP client
+    // Create HTTP client with security settings
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .https_only(true)  // Enforce HTTPS - reject any HTTP redirects
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -508,9 +510,11 @@ async fn fetch_and_update_wallpaper(
         mode
     );
 
-    // Create HTTP client
+    // Create HTTP client with security settings
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(10))
+        .https_only(true)  // Enforce HTTPS - reject any HTTP redirects
         .build()
         .context("Failed to create HTTP client")?;
 

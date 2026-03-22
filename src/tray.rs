@@ -190,25 +190,25 @@ fn create_icon() -> anyhow::Result<tray_icon::Icon> {
                 let dist_ratio = dist / radius;
                 
                 // Add subtle shading (darker at edges for 3D effect)
-                let shade = 1.0 - (dist_ratio * 0.3);
+                let shade = 1.0 - (dist_ratio * 0.25);
                 
                 if is_land(x as f32, y as f32) {
-                    // Land - green with shading
-                    let g = (100.0 * shade) as u8;
-                    let r = (60.0 * shade) as u8;
-                    let b = (40.0 * shade) as u8;
+                    // Land - bright vibrant green
+                    let r = (80.0 * shade) as u8;
+                    let g = (180.0 * shade) as u8;
+                    let b = (60.0 * shade) as u8;
                     rgba.extend_from_slice(&[r, g, b, 255]);
                 } else {
-                    // Ocean - deep blue with shading
-                    let b = (180.0 * shade) as u8;
-                    let g = (100.0 * shade) as u8;
-                    let r = (40.0 * shade) as u8;
+                    // Ocean - bright vivid blue
+                    let r = (30.0 * shade) as u8;
+                    let g = (120.0 * shade) as u8;
+                    let b = (220.0 * shade) as u8;
                     rgba.extend_from_slice(&[r, g, b, 255]);
                 }
             } else if dist <= radius + 1.0 {
                 // Subtle atmosphere glow at edge
-                let alpha = ((radius + 1.0 - dist) * 128.0) as u8;
-                rgba.extend_from_slice(&[100, 150, 255, alpha]);
+                let alpha = ((radius + 1.0 - dist) * 180.0) as u8;
+                rgba.extend_from_slice(&[120, 180, 255, alpha]);
             } else {
                 // Outside - transparent
                 rgba.extend_from_slice(&[0, 0, 0, 0]);

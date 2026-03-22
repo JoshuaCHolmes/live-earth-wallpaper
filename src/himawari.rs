@@ -2,6 +2,9 @@
 //!
 //! Fetches full-disk Earth imagery from the Himawari-8 geostationary satellite
 //! positioned at 140.7°E longitude.
+//!
+//! Security: All requests use HTTPS to himawari8-dl.nict.go.jp (Japan's NICT).
+//! Response sizes are validated to prevent memory exhaustion attacks.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -10,6 +13,11 @@ use std::time::Duration;
 
 const HIMAWARI_BASE_URL: &str = "https://himawari8-dl.nict.go.jp";
 const TILE_SIZE: u32 = 550;
+
+/// Maximum allowed size for metadata response (1 KB should be plenty)
+const MAX_METADATA_SIZE: usize = 1024;
+/// Maximum allowed size for a single tile (~2 MB for a 550x550 PNG)
+const MAX_TILE_SIZE: usize = 2 * 1024 * 1024;
 
 /// Represents the resolution level of Himawari-8 imagery
 #[derive(Debug, Clone, Copy)]
@@ -56,9 +64,27 @@ pub async fn fetch_latest_metadata(client: &reqwest::Client) -> Result<ImageMeta
         .await
         .context("Failed to fetch Himawari-8 metadata")?;
 
-    let metadata: ImageMetadata = response
-        .json()
-        .await
+    // Validate response size to prevent memory exhaustion
+    if let Some(content_length) = response.content_length() {
+        if content_length as usize > MAX_METADATA_SIZE {
+            anyhow::bail!(
+                "Metadata response too large: {} bytes (max {})",
+                content_length,
+                MAX_METADATA_SIZE
+            );
+        }
+    }
+
+    let bytes = response.bytes().await.context("Failed to read metadata")?;
+    if bytes.len() > MAX_METADATA_SIZE {
+        anyhow::bail!(
+            "Metadata response too large: {} bytes (max {})",
+            bytes.len(),
+            MAX_METADATA_SIZE
+        );
+    }
+
+    let metadata: ImageMetadata = serde_json::from_slice(&bytes)
         .context("Failed to parse Himawari-8 metadata")?;
 
     Ok(metadata)
@@ -94,10 +120,27 @@ async fn fetch_tile(
         .await
         .with_context(|| format!("Failed to fetch tile ({}, {})", x, y))?;
 
+    // Validate response size
+    if let Some(content_length) = response.content_length() {
+        if content_length as usize > MAX_TILE_SIZE {
+            anyhow::bail!(
+                "Tile ({}, {}) too large: {} bytes (max {})",
+                x, y, content_length, MAX_TILE_SIZE
+            );
+        }
+    }
+
     let bytes = response
         .bytes()
         .await
         .with_context(|| format!("Failed to download tile ({}, {})", x, y))?;
+
+    if bytes.len() > MAX_TILE_SIZE {
+        anyhow::bail!(
+            "Tile ({}, {}) too large: {} bytes (max {})",
+            x, y, bytes.len(), MAX_TILE_SIZE
+        );
+    }
 
     let img = image::load_from_memory(&bytes)
         .with_context(|| format!("Failed to decode tile ({}, {})", x, y))?;
