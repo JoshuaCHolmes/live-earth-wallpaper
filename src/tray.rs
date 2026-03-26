@@ -13,6 +13,7 @@ use crate::monitor::MultiMonitorMode;
 pub enum TrayCommand {
     RefreshNow,
     ToggleMode,
+    ToggleEarth,
     ToggleLabels,
     ToggleStartup,
     Exit,
@@ -29,13 +30,14 @@ pub struct TrayIcon {
     _tray: tray_icon::TrayIcon,
     menu_channel: Receiver<TrayCommand>,
     mode_item: MenuItem,
+    earth_item: MenuItem,
     labels_item: MenuItem,
     startup_item: MenuItem,
 }
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool) -> anyhow::Result<Self> {
+    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool) -> anyhow::Result<Self> {
         use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem};
         use tray_icon::{Icon, TrayIconBuilder};
@@ -45,6 +47,7 @@ impl TrayIcon {
         
         let refresh_item = MenuItem::with_id("refresh", "Refresh Now", true, None);
         let mode_item = MenuItem::with_id("mode", Self::mode_label(mode), true, None);
+        let earth_item = MenuItem::with_id("earth", Self::earth_label(earth_enabled), true, None);
         let labels_item = MenuItem::with_id("labels", Self::labels_label(labels_enabled), true, None);
         let startup_item = MenuItem::with_id("startup", Self::startup_label(startup_enabled), true, None);
         let separator = PredefinedMenuItem::separator();
@@ -52,6 +55,7 @@ impl TrayIcon {
 
         menu.append(&refresh_item)?;
         menu.append(&mode_item)?;
+        menu.append(&earth_item)?;
         menu.append(&labels_item)?;
         menu.append(&startup_item)?;
         menu.append(&separator)?;
@@ -79,6 +83,7 @@ impl TrayIcon {
                     let cmd = match event.id.0.as_str() {
                         "refresh" => Some(TrayCommand::RefreshNow),
                         "mode" => Some(TrayCommand::ToggleMode),
+                        "earth" => Some(TrayCommand::ToggleEarth),
                         "labels" => Some(TrayCommand::ToggleLabels),
                         "startup" => Some(TrayCommand::ToggleStartup),
                         "exit" => Some(TrayCommand::Exit),
@@ -97,6 +102,7 @@ impl TrayIcon {
             _tray: tray,
             menu_channel: rx,
             mode_item,
+            earth_item,
             labels_item,
             startup_item,
         })
@@ -104,9 +110,13 @@ impl TrayIcon {
 
     fn mode_label(mode: MultiMonitorMode) -> &'static str {
         match mode {
-            MultiMonitorMode::Span => "Mode: Span",
-            MultiMonitorMode::Duplicate => "Mode: Duplicate",
+            MultiMonitorMode::Span => "✓ Span Across Monitors",
+            MultiMonitorMode::Duplicate => "Span Across Monitors",
         }
+    }
+
+    fn earth_label(enabled: bool) -> &'static str {
+        if enabled { "✓ Show Earth" } else { "Show Earth" }
     }
 
     fn labels_label(enabled: bool) -> &'static str {
@@ -120,6 +130,11 @@ impl TrayIcon {
     /// Update the mode menu item text
     pub fn set_mode(&self, mode: MultiMonitorMode) {
         let _ = self.mode_item.set_text(Self::mode_label(mode));
+    }
+
+    /// Update the earth menu item text
+    pub fn set_earth(&self, enabled: bool) {
+        let _ = self.earth_item.set_text(Self::earth_label(enabled));
     }
 
     /// Update the labels menu item text

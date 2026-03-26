@@ -99,6 +99,65 @@ impl Renderer {
         }
     }
 
+    /// Render stars-only wallpaper (no Earth) for the given monitor layout
+    pub fn render_stars_only(
+        &mut self,
+        layout: &MonitorLayout,
+        mode: MultiMonitorMode,
+        timestamp: &DateTime<Utc>,
+    ) -> Result<RgbaImage> {
+        let width = layout.total_width;
+        let height = layout.total_height;
+        
+        let earth_angular_diameter = calculate_earth_angular_diameter();
+        let fov = earth_angular_diameter / EARTH_SCREEN_FRACTION;
+        
+        let mut canvas = RgbaImage::new(width, height);
+        
+        // Fill with black
+        for pixel in canvas.pixels_mut() {
+            *pixel = Rgba([0, 0, 0, 255]);
+        }
+
+        match mode {
+            MultiMonitorMode::Span => {
+                // Render celestial objects across entire canvas
+                self.render_stars_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
+                self.render_sun_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
+                self.render_planets_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
+                self.render_moon_viewport(&mut canvas, timestamp, fov, 0, 0, width, height);
+            }
+            MultiMonitorMode::Duplicate => {
+                let (min_x, min_y, _, _) = layout.bounds;
+                
+                // Render each monitor independently
+                for monitor in &layout.monitors {
+                    let canvas_x = (monitor.x - min_x) as u32;
+                    let canvas_y = (monitor.y - min_y) as u32;
+                    
+                    self.render_stars_viewport(
+                        &mut canvas, timestamp, fov,
+                        canvas_x, canvas_y, monitor.width, monitor.height
+                    );
+                    self.render_sun_viewport(
+                        &mut canvas, timestamp, fov,
+                        canvas_x, canvas_y, monitor.width, monitor.height
+                    );
+                    self.render_planets_viewport(
+                        &mut canvas, timestamp, fov,
+                        canvas_x, canvas_y, monitor.width, monitor.height
+                    );
+                    self.render_moon_viewport(
+                        &mut canvas, timestamp, fov,
+                        canvas_x, canvas_y, monitor.width, monitor.height
+                    );
+                }
+            }
+        }
+
+        Ok(canvas)
+    }
+
     /// Render a single image spanning all monitors
     /// Earth is centered on the virtual desktop, stars extend across all monitors
     fn render_span(
