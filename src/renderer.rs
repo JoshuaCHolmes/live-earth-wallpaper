@@ -85,6 +85,11 @@ impl Renderer {
         self.show_labels = show;
     }
 
+    /// Set the satellite longitude for coordinate calculations
+    pub fn set_satellite_longitude(&mut self, longitude: f64) {
+        crate::astronomy::coordinates::set_satellite_longitude(longitude);
+    }
+
     /// Render wallpaper for the given monitor layout and mode
     pub fn render(
         &mut self,

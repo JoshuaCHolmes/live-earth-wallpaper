@@ -2,11 +2,13 @@
 //!
 //! Provides a minimal tray interface with:
 //! - Refresh Now
+//! - Satellite selection
 //! - Toggle Mode (Span/Duplicate)
 //! - Run on Startup (toggle)
 //! - Exit
 
 use crate::monitor::MultiMonitorMode;
+use crate::satellite::Satellite;
 
 /// Commands that can be triggered from the tray menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +18,7 @@ pub enum TrayCommand {
     ToggleEarth,
     ToggleLabels,
     ToggleStartup,
+    SelectSatellite(Satellite),
     Exit,
 }
 
@@ -31,15 +34,16 @@ pub struct TrayIcon {
     menu_channel: Receiver<TrayCommand>,
     mode_item: MenuItem,
     earth_item: MenuItem,
+    satellite_items: Vec<MenuItem>,
     labels_item: MenuItem,
     startup_item: MenuItem,
 }
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool) -> anyhow::Result<Self> {
+    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool, current_satellite: Satellite) -> anyhow::Result<Self> {
         use anyhow::Context;
-        use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem};
+        use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem, Submenu};
         use tray_icon::{Icon, TrayIconBuilder};
 
         // Create menu items
@@ -48,6 +52,22 @@ impl TrayIcon {
         let refresh_item = MenuItem::with_id("refresh", "Refresh Now", true, None);
         let mode_item = MenuItem::with_id("mode", Self::mode_label(mode), true, None);
         let earth_item = MenuItem::with_id("earth", Self::earth_label(earth_enabled), true, None);
+        
+        // Satellite submenu
+        let satellite_menu = Submenu::new("Satellite", true);
+        let mut satellite_items = Vec::new();
+        for sat in Satellite::all() {
+            let label = Self::satellite_label(*sat, current_satellite);
+            let item = MenuItem::with_id(
+                format!("sat_{}", sat.name().to_lowercase().replace("-", "_")),
+                label,
+                true,
+                None,
+            );
+            satellite_menu.append(&item)?;
+            satellite_items.push(item);
+        }
+        
         let labels_item = MenuItem::with_id("labels", Self::labels_label(labels_enabled), true, None);
         let startup_item = MenuItem::with_id("startup", Self::startup_label(startup_enabled), true, None);
         let separator = PredefinedMenuItem::separator();
@@ -56,6 +76,7 @@ impl TrayIcon {
         menu.append(&refresh_item)?;
         menu.append(&mode_item)?;
         menu.append(&earth_item)?;
+        menu.append(&satellite_menu)?;
         menu.append(&labels_item)?;
         menu.append(&startup_item)?;
         menu.append(&separator)?;
@@ -87,6 +108,9 @@ impl TrayIcon {
                         "labels" => Some(TrayCommand::ToggleLabels),
                         "startup" => Some(TrayCommand::ToggleStartup),
                         "exit" => Some(TrayCommand::Exit),
+                        "sat_himawari_9" => Some(TrayCommand::SelectSatellite(Satellite::Himawari)),
+                        "sat_goes_east" => Some(TrayCommand::SelectSatellite(Satellite::GoesEast)),
+                        "sat_goes_west" => Some(TrayCommand::SelectSatellite(Satellite::GoesWest)),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {
@@ -103,6 +127,7 @@ impl TrayIcon {
             menu_channel: rx,
             mode_item,
             earth_item,
+            satellite_items,
             labels_item,
             startup_item,
         })
@@ -112,6 +137,14 @@ impl TrayIcon {
         match mode {
             MultiMonitorMode::Span => "✓ Span Across Monitors",
             MultiMonitorMode::Duplicate => "Span Across Monitors",
+        }
+    }
+
+    fn satellite_label(sat: Satellite, current: Satellite) -> String {
+        if sat == current {
+            format!("✓ {}", sat.name())
+        } else {
+            sat.name().to_string()
         }
     }
 
@@ -135,6 +168,15 @@ impl TrayIcon {
     /// Update the earth menu item text
     pub fn set_earth(&self, enabled: bool) {
         let _ = self.earth_item.set_text(Self::earth_label(enabled));
+    }
+
+    /// Update the satellite menu items
+    pub fn set_satellite(&self, current: Satellite) {
+        for (i, sat) in Satellite::all().iter().enumerate() {
+            if let Some(item) = self.satellite_items.get(i) {
+                let _ = item.set_text(Self::satellite_label(*sat, current));
+            }
+        }
     }
 
     /// Update the labels menu item text

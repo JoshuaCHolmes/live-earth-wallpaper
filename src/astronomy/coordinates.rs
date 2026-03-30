@@ -2,8 +2,29 @@
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-pub const SATELLITE_LONGITUDE: f64 = 140.7;
+// Default satellite longitude (Himawari-9 at 140.7°E)
+const DEFAULT_SATELLITE_LONGITUDE: f64 = 140.7;
+
+// Atomic storage for satellite longitude (stored as bits)
+static SATELLITE_LONGITUDE_BITS: AtomicU64 = AtomicU64::new(0);
+
+/// Get current satellite longitude
+pub fn get_satellite_longitude() -> f64 {
+    let bits = SATELLITE_LONGITUDE_BITS.load(Ordering::Relaxed);
+    if bits == 0 {
+        DEFAULT_SATELLITE_LONGITUDE
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+/// Set satellite longitude for coordinate calculations
+pub fn set_satellite_longitude(longitude: f64) {
+    SATELLITE_LONGITUDE_BITS.store(longitude.to_bits(), Ordering::Relaxed);
+}
+
 pub const SATELLITE_ALTITUDE_KM: f64 = 35793.0;
 pub const EARTH_RADIUS_KM: f64 = 6371.0;
 pub const EARTH_EQUATORIAL_RADIUS_KM: f64 = 6378.137;
@@ -170,7 +191,7 @@ pub fn equatorial_to_screen(
     // We want the view looking TOWARD the satellite's longitude from space
     // So we're looking at the longitude opposite to the sky we want to see
     // The "center" of our sky view is (Satellite Longitude + 180 degrees)
-    let view_longitude = SATELLITE_LONGITUDE + 180.0;
+    let view_longitude = get_satellite_longitude() + 180.0;
     
     let lst = lst_degrees(dt, view_longitude);
     let ha = deg_to_rad(lst - eq.ra_degrees());
