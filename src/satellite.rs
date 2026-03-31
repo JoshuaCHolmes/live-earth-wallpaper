@@ -362,13 +362,12 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
 
     tracing::info!("Fetching GK2A true-color (timestamp: {})...", timestamp);
 
-    // Fetch bands sequentially to reduce peak memory usage
-    tracing::info!("  Fetching GK2A band 1/3 (blue)...");
-    let band01 = fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
-    tracing::info!("  Fetching GK2A band 2/3 (green)...");
-    let band02 = fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
-    tracing::info!("  Fetching GK2A band 3/3 (red)...");
-    let band03 = fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
+    // Fetch all 3 bands in parallel (we need all of them to composite anyway)
+    let (band01, band02, band03) = tokio::try_join!(
+        fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE),
+        fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE),
+        fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE),
+    )?;
 
     tracing::info!("Compositing GK2A true-color...");
 
@@ -418,13 +417,12 @@ async fn fetch_himawari_image_slider(client: &reqwest::Client) -> Result<(RgbaIm
 
     tracing::info!("Fetching Himawari-9 from SLIDER (timestamp: {})...", timestamp);
 
-    // Fetch bands sequentially to reduce peak memory usage
-    tracing::info!("  Fetching Himawari band 1/3 (blue)...");
-    let band01 = fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
-    tracing::info!("  Fetching Himawari band 2/3 (green)...");
-    let band02 = fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
-    tracing::info!("  Fetching Himawari band 3/3 (red)...");
-    let band03 = fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
+    // Fetch all 3 bands in parallel (we need all of them to composite anyway)
+    let (band01, band02, band03) = tokio::try_join!(
+        fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+    )?;
 
     tracing::info!("Compositing Himawari true-color...");
 
@@ -475,18 +473,14 @@ async fn fetch_goes_image_slider(
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, slider_sat, "band_02").await?;
 
-    tracing::info!(
-        "Fetching {} from SLIDER (timestamp: {})...",
-        name, timestamp
-    );
+    tracing::info!("Fetching {} from SLIDER (timestamp: {})...", name, timestamp);
 
-    // Fetch bands sequentially to reduce peak memory usage
-    tracing::info!("  Fetching {} band 1/3 (blue)...", name);
-    let band01 = fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
-    tracing::info!("  Fetching {} band 2/3 (red)...", name);
-    let band02 = fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
-    tracing::info!("  Fetching {} band 3/3 (veggie)...", name);
-    let band03 = fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
+    // Fetch all 3 bands in parallel (we need all of them to composite anyway)
+    let (band01, band02, band03) = tokio::try_join!(
+        fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+    )?;
 
     tracing::info!("Compositing {} true-color...", name);
 
