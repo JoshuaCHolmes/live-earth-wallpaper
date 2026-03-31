@@ -8,9 +8,10 @@ A native Windows application that displays live geostationary satellite imagery 
 
 - **Live Earth imagery** from multiple geostationary satellites:
   - **Himawari-9** (140.7°E) - Asia/Pacific view
-  - **GOES-East** (75.2°W) - Americas/Atlantic view
+  - **GOES-East** (75.2°W) - Americas/Atlantic view  
   - **GOES-West** (137.2°W) - Pacific/West Americas view
-  - **GK2A** (128.2°E) - Korea/Asia view (true RGB, no synthetic green)
+  - **GK2A** (128.2°E) - Korea/Asia view
+- **Consistent color processing** - all satellites use the same GOES-style green synthesis from Blue (0.47µm), Red (0.64µm), and Veggie (0.86µm) bands for uniform appearance
 - **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with ~25,800 stars (mag ≤ 7.5)
 - **Smooth updates** - stars/sun/moon/planets refresh every 60 seconds, Earth image updates every 10 minutes
 - **Realistic Rendering**:
@@ -90,7 +91,7 @@ live-earth-wallpaper.exe --update-once --duplicate
 
 ### Field of View
 
-The wallpaper simulates the view from space looking toward Earth at 140.7°E longitude (Himawari-8's position). The camera is placed at a virtual distance where Earth subtends 60% of the vertical field of view (~17.4° angular diameter).
+The wallpaper simulates the view from space looking toward Earth from the selected geostationary satellite's position. The camera is placed at a virtual distance where Earth subtends 60% of the vertical field of view (~17.4° angular diameter).
 
 ### Rendering Accuracy
 
@@ -115,7 +116,6 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 | Data | Source |
 |------|--------|
 | Earth imagery | [RAMMB SLIDER / CIRA](https://slider.cira.colostate.edu/) (Himawari-9, GOES-East, GOES-West, GK2A) |
-| Himawari fallback | [NICT Science Cloud](https://himawari8.nict.go.jp/) (when SLIDER unavailable) |
 | Star catalog | [HYG Database v4.2](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
 | Planet positions | [NASA JPL](https://ssd.jpl.nasa.gov/planets/approx_pos.html) orbital elements |
 | Moon position | Meeus lunar theory |
