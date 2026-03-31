@@ -177,23 +177,15 @@ async fn fetch_himawari_image_nict(client: &reqwest::Client) -> Result<(RgbaImag
 
     let mut composite = RgbaImage::new(total_size, total_size);
 
-    let mut handles = Vec::new();
+    // Fetch tiles sequentially to minimize peak memory
     for y in 0..grid_size {
         for x in 0..grid_size {
-            let client = client.clone();
-            let date_path = date_path.clone();
-            handles.push(tokio::spawn(async move {
-                let tile = fetch_himawari_tile(&client, &date_path, level, x, y).await?;
-                Ok::<_, anyhow::Error>((x, y, tile))
-            }));
+            let tile = fetch_himawari_tile(client, &date_path, level, x, y).await?;
+            composite
+                .copy_from(&tile.to_rgba8(), x * HIMAWARI_TILE_SIZE, y * HIMAWARI_TILE_SIZE)
+                .with_context(|| format!("Failed to composite tile ({}, {})", x, y))?;
+            // tile dropped here, freeing memory
         }
-    }
-
-    for handle in handles {
-        let (x, y, tile) = handle.await??;
-        composite
-            .copy_from(&tile.to_rgba8(), x * HIMAWARI_TILE_SIZE, y * HIMAWARI_TILE_SIZE)
-            .with_context(|| format!("Failed to composite tile ({}, {})", x, y))?;
     }
 
     let timestamp = chrono::NaiveDateTime::parse_from_str(&metadata.date, "%Y-%m-%d %H:%M:%S")
@@ -325,6 +317,7 @@ async fn fetch_slider_tile(
 }
 
 /// Fetch a complete band image from SLIDER at optimal resolution
+/// Fetches tiles sequentially to minimize memory usage
 async fn fetch_slider_band(
     client: &reqwest::Client,
     sat: &str,
@@ -345,27 +338,16 @@ async fn fetch_slider_band(
 
     let mut composite = image::GrayImage::new(total_size, total_size);
 
-    // Fetch all tiles in parallel
-    let mut handles = Vec::new();
+    // Fetch tiles sequentially to minimize peak memory
     for row in 0..tiles_per_side {
         for col in 0..tiles_per_side {
-            let client = client.clone();
-            let sat = sat.to_string();
-            let band = band.to_string();
-            let date_path = date_path.to_string();
-            handles.push(tokio::spawn(async move {
-                let tile = fetch_slider_tile(&client, &sat, &band, timestamp, &date_path, zoom, row, col).await?;
-                Ok::<_, anyhow::Error>((row, col, tile))
-            }));
+            let tile = fetch_slider_tile(client, sat, band, timestamp, date_path, zoom, row, col).await?;
+            let gray = tile.to_luma8();
+            composite
+                .copy_from(&gray, col * tile_size, row * tile_size)
+                .with_context(|| format!("Failed to composite tile ({}, {})", row, col))?;
+            // tile and gray are dropped here, freeing memory
         }
-    }
-
-    for handle in handles {
-        let (row, col, tile) = handle.await??;
-        let gray = tile.to_luma8();
-        composite
-            .copy_from(&gray, col * tile_size, row * tile_size)
-            .with_context(|| format!("Failed to composite tile ({}, {})", row, col))?;
     }
 
     Ok(composite)
