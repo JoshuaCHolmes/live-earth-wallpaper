@@ -374,21 +374,18 @@ async fn fetch_slider_band(
 /// Fetch GK2A true-color image from SLIDER
 /// GK2A has actual RGB bands: band_01=Blue, band_02=Green, band_03=Red
 async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
-    // Use 2200px target to match Himawari level 4 (2200px) - adaptive zoom will pick appropriate level
-    // GK2A tile_size=688, zoom 2 = 2752px which is close
     let target_size = 2200;
 
-    // Get latest timestamp (all bands should have same timestamp)
     let (timestamp, date_path) = fetch_slider_timestamp(client, "gk2a", "band_03").await?;
 
-    tracing::info!(
-        "Fetching GK2A true-color (timestamp: {}, target: {}px)",
-        timestamp, target_size
-    );
+    tracing::info!("Fetching GK2A true-color (timestamp: {})...", timestamp);
 
     // Fetch bands sequentially to reduce peak memory usage
+    tracing::info!("  Fetching GK2A band 1/3 (blue)...");
     let band01 = fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
+    tracing::info!("  Fetching GK2A band 2/3 (green)...");
     let band02 = fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
+    tracing::info!("  Fetching GK2A band 3/3 (red)...");
     let band03 = fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
 
     tracing::info!("Compositing GK2A true-color...");
@@ -437,17 +434,17 @@ async fn fetch_himawari_image_slider(client: &reqwest::Client) -> Result<(RgbaIm
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, "himawari", "band_03").await?;
 
-    tracing::info!(
-        "Fetching Himawari-9 from SLIDER (timestamp: {}, target: {}px)",
-        timestamp, target_size
-    );
+    tracing::info!("Fetching Himawari-9 from SLIDER (timestamp: {})...", timestamp);
 
     // Fetch bands sequentially to reduce peak memory usage
+    tracing::info!("  Fetching Himawari band 1/3 (blue)...");
     let band01 = fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
+    tracing::info!("  Fetching Himawari band 2/3 (green)...");
     let band02 = fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
+    tracing::info!("  Fetching Himawari band 3/3 (red)...");
     let band03 = fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
 
-    tracing::info!("Compositing Himawari true-color from SLIDER...");
+    tracing::info!("Compositing Himawari true-color...");
 
     let width = band03.width();
     let height = band03.height();
@@ -491,22 +488,25 @@ async fn fetch_goes_image_slider(
     slider_sat: &str,
     name: &str,
 ) -> Result<(RgbaImage, DateTime<Utc>)> {
-    let target_size = 2712; // GOES at zoom 2 = 678 * 4
+    // Use 2200px target to match Himawari NICT (reduces memory vs 2712)
+    let target_size = 2200;
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, slider_sat, "band_02").await?;
 
     tracing::info!(
-        "Fetching {} from SLIDER (timestamp: {}, target: {}px)",
-        name, timestamp, target_size
+        "Fetching {} from SLIDER (timestamp: {})...",
+        name, timestamp
     );
 
     // Fetch bands sequentially to reduce peak memory usage
-    // (parallel fetch holds all 3 bands + tiles in memory simultaneously)
+    tracing::info!("  Fetching {} band 1/3 (blue)...", name);
     let band01 = fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
+    tracing::info!("  Fetching {} band 2/3 (red)...", name);
     let band02 = fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
+    tracing::info!("  Fetching {} band 3/3 (veggie)...", name);
     let band03 = fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
 
-    tracing::info!("Compositing {} true-color from SLIDER...", name);
+    tracing::info!("Compositing {} true-color...", name);
 
     let width = band02.width();
     let height = band02.height();

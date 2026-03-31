@@ -143,12 +143,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
     // Initial update (full, with Earth fetch if enabled)
     tracing::info!("Performing initial wallpaper update...");
-    let mut cached_earth: Option<(image::RgbaImage, chrono::DateTime<Utc>)> = None;
+    let mut cached_earth_timestamp: Option<chrono::DateTime<Utc>> = None;
     let mut is_stale = false;
     if show_earth {
         match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-            Ok((earth_img, timestamp, stale)) => {
-                cached_earth = Some((earth_img, timestamp));
+            Ok((_earth_img, timestamp, stale)) => {
+                // Don't keep image in memory - use disk cache instead
+                cached_earth_timestamp = Some(timestamp);
                 is_stale = stale;
             }
             Err(e) => {
@@ -201,13 +202,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 
                 // Re-render with new monitor configuration
                 tracing::info!("Re-rendering wallpaper for new display configuration...");
-                if show_earth {
-                    if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                        if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels, current_satellite)) {
-                            tracing::error!("Display change re-render failed: {}", e);
-                        }
+                if show_earth && cached_earth_timestamp.is_some() {
+                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                        tracing::error!("Display change re-render failed: {}", e);
                     }
-                } else {
+                } else if !show_earth {
                     if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
                         tracing::error!("Display change re-render failed: {}", e);
                     }
@@ -222,8 +221,8 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     tracing::info!("Manual refresh requested");
                     if show_earth {
                         match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-                            Ok((earth_img, timestamp, stale)) => {
-                                cached_earth = Some((earth_img, timestamp));
+                            Ok((_earth_img, timestamp, stale)) => {
+                                cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
                             }
                             Err(e) => {
@@ -247,13 +246,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     tray.set_mode(current_mode);
                     tracing::info!("Switched to {:?} mode", current_mode);
                     // Immediate refresh to apply mode change
-                    if show_earth {
-                        if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                            if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels, current_satellite)) {
-                                tracing::error!("Mode switch refresh failed: {}", e);
-                            }
+                    if show_earth && cached_earth_timestamp.is_some() {
+                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                            tracing::error!("Mode switch refresh failed: {}", e);
                         }
-                    } else {
+                    } else if !show_earth {
                         if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
                             tracing::error!("Mode switch refresh failed: {}", e);
                         }
@@ -267,8 +264,8 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     if show_earth {
                         // Fetch fresh Earth image when re-enabling
                         match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-                            Ok((earth_img, timestamp, stale)) => {
-                                cached_earth = Some((earth_img, timestamp));
+                            Ok((_earth_img, timestamp, stale)) => {
+                                cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
                             }
                             Err(e) => {
@@ -289,13 +286,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     tray.set_labels(show_labels);
                     tracing::info!("Labels {}", if show_labels { "enabled" } else { "disabled" });
                     // Immediate refresh to show/hide labels
-                    if show_earth {
-                        if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                            if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels, current_satellite)) {
-                                tracing::error!("Label refresh failed: {}", e);
-                            }
+                    if show_earth && cached_earth_timestamp.is_some() {
+                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                            tracing::error!("Label refresh failed: {}", e);
                         }
-                    } else {
+                    } else if !show_earth {
                         if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
                             tracing::error!("Label refresh failed: {}", e);
                         }
@@ -321,11 +316,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         tray.set_satellite(current_satellite);
                         tracing::info!("Switched to satellite: {}", current_satellite.name());
                         // Clear cache and fetch new image
-                        cached_earth = None;
+                        cached_earth_timestamp = None;
                         if show_earth {
                             match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-                                Ok((earth_img, timestamp, stale)) => {
-                                    cached_earth = Some((earth_img, timestamp));
+                                Ok((_earth_img, timestamp, stale)) => {
+                                    cached_earth_timestamp = Some(timestamp);
                                     is_stale = stale;
                                 }
                                 Err(e) => {
@@ -355,8 +350,8 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         if show_earth && last_full_update.elapsed() >= full_update_interval {
             tracing::info!("Scheduled full update starting...");
             match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-                Ok((earth_img, timestamp, stale)) => {
-                    cached_earth = Some((earth_img, timestamp));
+                Ok((_earth_img, timestamp, stale)) => {
+                    cached_earth_timestamp = Some(timestamp);
                     is_stale = stale;
                 }
                 Err(e) => {
@@ -374,8 +369,8 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     // We're using stale data - try to fetch fresh Earth image
                     tracing::info!("Stale data detected, attempting to fetch fresh Earth image...");
                     match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
-                        Ok((earth_img, timestamp, stale)) => {
-                            cached_earth = Some((earth_img, timestamp));
+                        Ok((_earth_img, timestamp, stale)) => {
+                            cached_earth_timestamp = Some(timestamp);
                             is_stale = stale;
                             if !stale {
                                 tracing::info!("Successfully recovered from stale state!");
@@ -384,16 +379,16 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         Err(e) => {
                             tracing::debug!("Still unable to fetch fresh image: {}", e);
                             // Fall back to star refresh with cached (grayscale) image
-                            if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                                if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels, current_satellite)) {
+                            if cached_earth_timestamp.is_some() {
+                                if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, true)) {
                                     tracing::error!("Star refresh failed: {}", e);
                                 }
                             }
                         }
                     }
-                } else if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                    tracing::info!("Star refresh (cached Earth from {})...", timestamp.format("%H:%M UTC"));
-                    if let Err(e) = rt.block_on(render_with_cached_earth(earth_img, timestamp, current_mode, show_labels, current_satellite)) {
+                } else if cached_earth_timestamp.is_some() {
+                    tracing::info!("Star refresh (using disk cache)...");
+                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, false)) {
                         tracing::error!("Star refresh failed: {}", e);
                     }
                 }
@@ -440,11 +435,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         );
 
         // Initial update
-        let mut cached_earth: Option<(image::RgbaImage, DateTime<Utc>)> = None;
+        let mut cached_earth_timestamp: Option<DateTime<Utc>> = None;
         let mut is_stale = false;
         match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
-            Ok((earth_img, timestamp, stale)) => {
-                cached_earth = Some((earth_img, timestamp));
+            Ok((_earth_img, timestamp, stale)) => {
+                cached_earth_timestamp = Some(timestamp);
                 is_stale = stale;
             }
             Err(e) => {
@@ -466,8 +461,8 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                     tracing::info!("Scheduled full update starting...");
                     match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
-                        Ok((earth_img, timestamp, stale)) => {
-                            cached_earth = Some((earth_img, timestamp));
+                        Ok((_earth_img, timestamp, stale)) => {
+                            cached_earth_timestamp = Some(timestamp);
                             is_stale = stale;
                         }
                         Err(e) => {
@@ -483,20 +478,20 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     if is_stale {
                         // Try to recover from stale state
                         match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
-                            Ok((earth_img, timestamp, stale)) => {
-                                cached_earth = Some((earth_img, timestamp));
+                            Ok((_earth_img, timestamp, stale)) => {
+                                cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
                             }
                             Err(_) => {
-                                // Keep using cached image
-                                if let Some((ref earth_img, ref timestamp)) = cached_earth {
-                                    let _ = render_with_cached_earth(earth_img, timestamp, initial_mode, show_labels, current_satellite).await;
+                                // Keep using cached image from disk
+                                if cached_earth_timestamp.is_some() {
+                                    let _ = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, true).await;
                                 }
                             }
                         }
-                    } else if let Some((ref earth_img, ref timestamp)) = cached_earth {
+                    } else if cached_earth_timestamp.is_some() {
                         tracing::debug!("Star refresh...");
-                        if let Err(e) = render_with_cached_earth(earth_img, timestamp, initial_mode, show_labels, current_satellite).await {
+                        if let Err(e) = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, false).await {
                             tracing::error!("Star refresh failed: {}", e);
                         }
                     }
@@ -660,15 +655,22 @@ async fn fetch_and_update_wallpaper(
     }
 }
 
-/// Render wallpaper using cached Earth image with updated star positions
-async fn render_with_cached_earth(
-    earth_image: &image::RgbaImage,
-    _earth_timestamp: &DateTime<Utc>,
+/// Render wallpaper using disk-cached Earth image with updated star positions
+async fn render_with_disk_cached_earth(
     mode: monitor::MultiMonitorMode,
     show_labels: bool,
     sat: Satellite,
+    is_stale: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
+    
+    // Load Earth image from disk cache
+    let (mut earth_image, timestamp) = load_cached_earth_image(sat)?;
+    
+    // Convert to grayscale if stale
+    if is_stale {
+        earth_image = convert_to_grayscale(&earth_image);
+    }
     
     // Detect monitors
     let layout = monitor::MonitorLayout::detect()
@@ -681,7 +683,7 @@ async fn render_with_cached_earth(
     renderer.set_show_labels(show_labels);
     renderer.set_satellite_longitude(sat.longitude());
     let wallpaper_image = renderer
-        .render(earth_image, &layout, mode, &render_time)
+        .render(&earth_image, &layout, mode, &render_time)
         .context("Failed to render wallpaper")?;
 
     // Save and set wallpaper
@@ -691,7 +693,9 @@ async fn render_with_cached_earth(
     wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
 
     let elapsed = start.elapsed();
-    tracing::debug!("Star refresh complete in {:.1}ms", elapsed.as_millis());
+    tracing::debug!("Star refresh complete in {:.1}ms (Earth from {} cache)", 
+        elapsed.as_millis(),
+        timestamp.format("%H:%M UTC"));
 
     Ok(())
 }
