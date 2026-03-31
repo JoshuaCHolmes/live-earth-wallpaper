@@ -25,7 +25,7 @@ A native Windows application that displays live geostationary satellite imagery 
 - **Offline fallback** - uses cached imagery (shown in grayscale) when network unavailable
 - **Automatic failover** - falls back to alternate data sources if primary is unavailable
 - **System tray** - minimal UI with satellite selection, refresh, mode toggle, labels toggle, and startup options
-- **Lightweight** - ~7-8MB executable, ~20-35MB memory footprint
+- **Lightweight** - ~7MB executable, ~3MB passive memory (~40-50MB briefly during refresh)
 
 ## Requirements
 
