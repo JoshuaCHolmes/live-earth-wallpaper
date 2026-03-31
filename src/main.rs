@@ -524,7 +524,7 @@ async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(10))
-        .https_only(sat == Satellite::Himawari)
+        .https_only(true)
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -605,7 +605,7 @@ async fn fetch_and_update_wallpaper(
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .connect_timeout(Duration::from_secs(10))
-        .https_only(sat == Satellite::Himawari)  // HTTPS only for Himawari (NICT), others use HTTP
+        .https_only(true)
         .build()
         .context("Failed to create HTTP client")?;
 

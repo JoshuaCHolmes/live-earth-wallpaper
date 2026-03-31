@@ -61,6 +61,7 @@ impl MonitorLayout {
     }
 
     /// Get the primary monitor
+    #[allow(dead_code)]
     pub fn primary(&self) -> Option<&Monitor> {
         self.monitors.iter().find(|m| m.is_primary)
     }

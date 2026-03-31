@@ -69,6 +69,7 @@ impl Satellite {
     }
 
     /// Get next satellite in rotation
+    #[allow(dead_code)]
     pub fn next(&self) -> Self {
         match self {
             Satellite::Himawari => Satellite::GoesEast,

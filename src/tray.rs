@@ -44,7 +44,7 @@ impl TrayIcon {
     pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool, current_satellite: Satellite) -> anyhow::Result<Self> {
         use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem, Submenu};
-        use tray_icon::{Icon, TrayIconBuilder};
+        use tray_icon::TrayIconBuilder;
 
         // Create menu items
         let menu = Menu::new();
