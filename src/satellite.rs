@@ -386,12 +386,10 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
         timestamp, target_size
     );
 
-    // Fetch all three bands in parallel - GK2A has TRUE RGB!
-    let (band01, band02, band03) = tokio::try_join!(
-        fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Blue
-        fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Green (TRUE!)
-        fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Red
-    )?;
+    // Fetch bands sequentially to reduce peak memory usage
+    let band01 = fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
+    let band02 = fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
+    let band03 = fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE).await?;
 
     tracing::info!("Compositing GK2A true-color...");
 
@@ -416,6 +414,11 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
         }
     }
 
+    // Drop bands to free memory
+    drop(band01);
+    drop(band02);
+    drop(band03);
+
     // Parse timestamp: 20260330222000 -> DateTime
     let ts_str = timestamp.to_string();
     let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
@@ -439,12 +442,10 @@ async fn fetch_himawari_image_slider(client: &reqwest::Client) -> Result<(RgbaIm
         timestamp, target_size
     );
 
-    // Himawari on SLIDER has true RGB bands
-    let (band01, band02, band03) = tokio::try_join!(
-        fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
-        fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
-        fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
-    )?;
+    // Fetch bands sequentially to reduce peak memory usage
+    let band01 = fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
+    let band02 = fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
+    let band03 = fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE).await?;
 
     tracing::info!("Compositing Himawari true-color from SLIDER...");
 
@@ -466,6 +467,11 @@ async fn fetch_himawari_image_slider(client: &reqwest::Client) -> Result<(RgbaIm
             composite.put_pixel(x, y, image::Rgba([r_out, g_out, b_out, 255]));
         }
     }
+
+    // Drop bands to free memory
+    drop(band01);
+    drop(band02);
+    drop(band03);
 
     let ts_str = timestamp.to_string();
     let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
@@ -494,12 +500,11 @@ async fn fetch_goes_image_slider(
         name, timestamp, target_size
     );
 
-    // GOES bands on SLIDER: band_01=Blue, band_02=Red, band_03=Veggie
-    let (band01, band02, band03) = tokio::try_join!(
-        fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
-        fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
-        fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
-    )?;
+    // Fetch bands sequentially to reduce peak memory usage
+    // (parallel fetch holds all 3 bands + tiles in memory simultaneously)
+    let band01 = fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
+    let band02 = fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
+    let band03 = fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE).await?;
 
     tracing::info!("Compositing {} true-color from SLIDER...", name);
 
@@ -525,6 +530,11 @@ async fn fetch_goes_image_slider(
             composite.put_pixel(x, y, image::Rgba([r_out, g_out, b_out, 255]));
         }
     }
+
+    // Drop bands to free memory before returning
+    drop(band01);
+    drop(band02);
+    drop(band03);
 
     let ts_str = timestamp.to_string();
     let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")

@@ -117,7 +117,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     let mut show_earth = true;
 
     // Current satellite
-    let mut current_satellite = Satellite::Himawari;
+    let mut current_satellite = Satellite::GoesEast;
     tracing::info!("Satellite: {}", current_satellite.name());
 
     // Create tray icon
@@ -425,7 +425,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
         let show_labels = false; // No tray on non-Windows, default off
-        let current_satellite = Satellite::Himawari; // Default satellite
+        let current_satellite = Satellite::GoesEast; // Default satellite
 
         // Handle Ctrl+C on Unix
         tokio::spawn(async move {
@@ -511,7 +511,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
 async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<()> {
     let start = std::time::Instant::now();
-    let sat = Satellite::Himawari; // Default for --update-once mode
+    let sat = Satellite::GoesEast; // Default for --update-once mode
     
     // Detect monitors
     let layout = monitor::MonitorLayout::detect()
