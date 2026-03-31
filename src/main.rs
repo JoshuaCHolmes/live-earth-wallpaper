@@ -7,7 +7,6 @@
 #![windows_subsystem = "windows"]
 
 mod astronomy;
-mod himawari;
 mod monitor;
 mod moon_texture;
 mod renderer;
@@ -508,10 +507,6 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         tracing::info!("Shutting down...");
         Ok(())
     })
-}
-
-async fn update_wallpaper() -> Result<()> {
-    update_wallpaper_with_mode(monitor::MultiMonitorMode::Span).await
 }
 
 async fn update_wallpaper_with_mode(mode: monitor::MultiMonitorMode) -> Result<()> {

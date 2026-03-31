@@ -8,7 +8,6 @@ use super::coordinates::{
     Ecliptic, Equatorial, ScreenPosition, equatorial_to_screen,
 };
 use chrono::{DateTime, Utc};
-use std::f64::consts::PI;
 
 #[derive(Debug, Clone)]
 pub struct OrbitalElements {

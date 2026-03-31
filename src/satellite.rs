@@ -4,9 +4,10 @@
 //! - Himawari-9 (140.7°E) - Japan/Asia-Pacific  
 //! - GOES-East/GOES-19 (75.2°W) - Americas/Atlantic
 //! - GOES-West/GOES-18 (137.2°W) - Pacific/West Americas
+//! - GK2A (128.2°E) - Korea/Asia (GEO-KOMPSAT-2A with true RGB bands)
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use image::{DynamicImage, GenericImage, RgbaImage};
 use std::time::Duration;
 
@@ -20,6 +21,9 @@ pub enum Satellite {
     GoesEast,
     /// GOES-West (GOES-18) at 137.2°W (NOAA)
     GoesWest,
+    /// GEO-KOMPSAT-2A at 128.2°E (Korea Meteorological Administration)
+    /// Uses RAMMB SLIDER for clean true-RGB imagery
+    Gk2a,
 }
 
 impl Satellite {
@@ -29,6 +33,7 @@ impl Satellite {
             Satellite::Himawari => 140.7,
             Satellite::GoesEast => -75.2,
             Satellite::GoesWest => -137.2,
+            Satellite::Gk2a => 128.2,
         }
     }
 
@@ -38,6 +43,7 @@ impl Satellite {
             Satellite::Himawari => "Himawari-9",
             Satellite::GoesEast => "GOES-East",
             Satellite::GoesWest => "GOES-West",
+            Satellite::Gk2a => "GK2A",
         }
     }
 
@@ -46,7 +52,8 @@ impl Satellite {
         match self {
             Satellite::Himawari => Satellite::GoesEast,
             Satellite::GoesEast => Satellite::GoesWest,
-            Satellite::GoesWest => Satellite::Himawari,
+            Satellite::GoesWest => Satellite::Gk2a,
+            Satellite::Gk2a => Satellite::Himawari,
         }
     }
 
@@ -56,6 +63,7 @@ impl Satellite {
             Satellite::Himawari,
             Satellite::GoesEast,
             Satellite::GoesWest,
+            Satellite::Gk2a,
         ]
     }
 }
@@ -155,7 +163,7 @@ async fn fetch_himawari_tile(
     image::load_from_memory(&bytes).with_context(|| format!("Failed to decode tile ({}, {})", x, y))
 }
 
-async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
+async fn fetch_himawari_image_nict(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
     let metadata = fetch_himawari_metadata(client).await?;
     let date_path = himawari_date_to_path(&metadata.date);
     let level = HimawariLevel::Level4;
@@ -163,7 +171,7 @@ async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, Da
     let total_size = level.total_pixels();
 
     tracing::info!(
-        "Fetching Himawari-9: {} ({}x{} tiles)",
+        "Fetching Himawari-9 from NICT: {} ({}x{} tiles)",
         metadata.date, grid_size, grid_size
     );
 
@@ -195,88 +203,308 @@ async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, Da
     Ok((composite, timestamp))
 }
 
+/// Fetch Himawari image - tries NICT first, falls back to SLIDER
+async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
+    // Try NICT first (faster, pre-composited true color)
+    match fetch_himawari_image_nict(client).await {
+        Ok(result) => return Ok(result),
+        Err(e) => {
+            tracing::warn!("NICT Himawari failed, trying SLIDER fallback: {}", e);
+        }
+    }
+    
+    // Fallback to SLIDER (requires band compositing but more reliable)
+    fetch_himawari_image_slider(client).await
+}
+
 // ============================================================================
-// GOES fetching (high-res GeoColor images without watermarks)
+// SLIDER-based fetching (GK2A, Himawari fallback, GOES)
 // ============================================================================
 
-const MAX_IMAGE_SIZE: usize = 50 * 1024 * 1024; // 50 MB max for high-res images
-const GOES_IMAGE_SIZE: u32 = 10848; // High-res bands available in ZIP format
+const SLIDER_BASE_URL: &str = "https://slider.cira.colostate.edu";
+const MAX_SLIDER_METADATA_SIZE: usize = 64 * 1024; // 64KB for timestamps JSON
 
-/// Fetch a single GOES band from ZIP file (clean, no watermarks)
-async fn fetch_goes_band_zip(
+// Tile sizes vary by satellite (from SLIDER define-products.js)
+const GK2A_TILE_SIZE: u32 = 688;
+const HIMAWARI_SLIDER_TILE_SIZE: u32 = 688;
+const GOES_SLIDER_TILE_SIZE: u32 = 678;
+
+/// SLIDER timestamps response
+#[derive(Debug, serde::Deserialize)]
+struct SliderTimestamps {
+    timestamps_int: Vec<i64>,
+}
+
+/// Determine optimal zoom level for SLIDER based on desired output size and tile size
+fn slider_zoom_for_size(target_size: u32, tile_size: u32) -> u8 {
+    // zoom 0 = tile_size, zoom 1 = tile_size*2, etc.
+    // We want smallest zoom that gives us >= target_size
+    for zoom in 0..=5 {
+        let size = tile_size * (1 << zoom);
+        if size >= target_size {
+            return zoom;
+        }
+    }
+    5 // Max zoom
+}
+
+/// Fetch latest timestamp for a SLIDER satellite/band
+async fn fetch_slider_timestamp(
     client: &reqwest::Client,
-    satellite_id: &str,
-    band: u8,
-) -> Result<image::GrayImage> {
+    sat: &str,
+    band: &str,
+) -> Result<(i64, String)> {
     let url = format!(
-        "https://cdn.star.nesdis.noaa.gov/{}/ABI/FD/{:02}/{}x{}.jpg.zip",
-        satellite_id,
-        band,
-        GOES_IMAGE_SIZE,
-        GOES_IMAGE_SIZE
+        "{}/data/json/{}/full_disk/{}/latest_times.json",
+        SLIDER_BASE_URL, sat, band
     );
-
-    tracing::debug!("Fetching band {:02} from ZIP...", band);
 
     let response = client
         .get(&url)
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(10))
         .send()
         .await
-        .with_context(|| format!("Failed to fetch band {:02}", band))?;
+        .context("Failed to fetch SLIDER timestamps")?;
 
     if let Some(len) = response.content_length() {
-        if len as usize > MAX_IMAGE_SIZE {
-            anyhow::bail!("Band {:02} ZIP too large: {} bytes", band, len);
+        if len as usize > MAX_SLIDER_METADATA_SIZE {
+            anyhow::bail!("SLIDER metadata too large: {} bytes", len);
         }
     }
 
     let bytes = response.bytes().await?;
-    
-    // Extract JPEG from ZIP
-    let cursor = std::io::Cursor::new(bytes.as_ref());
-    let mut archive = zip::ZipArchive::new(cursor)
-        .with_context(|| format!("Failed to open band {:02} ZIP", band))?;
-    
-    if archive.len() != 1 {
-        anyhow::bail!("Unexpected ZIP structure for band {:02}", band);
-    }
-    
-    let mut file = archive.by_index(0)
-        .with_context(|| format!("Failed to read band {:02} from ZIP", band))?;
-    
-    let mut img_bytes = Vec::new();
-    std::io::Read::read_to_end(&mut file, &mut img_bytes)?;
-    
-    let img = image::load_from_memory(&img_bytes)
-        .with_context(|| format!("Failed to decode band {:02}", band))?;
+    let timestamps: SliderTimestamps = serde_json::from_slice(&bytes)
+        .context("Failed to parse SLIDER timestamps")?;
 
-    Ok(img.to_luma8())
+    let ts = *timestamps.timestamps_int.first()
+        .ok_or_else(|| anyhow::anyhow!("No timestamps available"))?;
+
+    // Extract date parts for URL path: YYYYMMDDHHMMSS -> YYYY/MM/DD
+    let ts_str = ts.to_string();
+    let date_path = format!("{}/{}/{}", &ts_str[0..4], &ts_str[4..6], &ts_str[6..8]);
+
+    Ok((ts, date_path))
 }
 
-/// Create true-color composite from GOES ABI bands (clean, no watermarks)
-/// Uses Band 02 (Red), Band 03 (Veggie), Band 01 (Blue)
-/// Green is synthesized: G = 0.45*R + 0.10*Veggie + 0.45*B
-async fn fetch_goes_truecolor(
+/// Fetch a single SLIDER tile
+async fn fetch_slider_tile(
     client: &reqwest::Client,
-    satellite_id: &str,
-    name: &str,
-) -> Result<(RgbaImage, DateTime<Utc>)> {
-    tracing::info!("Fetching {} true-color bands ({}x{})...", name, GOES_IMAGE_SIZE, GOES_IMAGE_SIZE);
+    sat: &str,
+    band: &str,
+    timestamp: i64,
+    date_path: &str,
+    zoom: u8,
+    row: u32,
+    col: u32,
+) -> Result<DynamicImage> {
+    let url = format!(
+        "{}/data/imagery/{}/{}---full_disk/{}/{}/{:02}/{:03}_{:03}.png",
+        SLIDER_BASE_URL, date_path, sat, band, timestamp, zoom, row, col
+    );
 
-    // Fetch all three bands in parallel
+    let response = client
+        .get(&url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch SLIDER tile z{} r{} c{}", zoom, row, col))?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("SLIDER tile request failed: {}", response.status());
+    }
+
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_TILE_SIZE {
+            anyhow::bail!("SLIDER tile too large: {} bytes", len);
+        }
+    }
+
+    let bytes = response.bytes().await?;
+    image::load_from_memory(&bytes)
+        .with_context(|| format!("Failed to decode SLIDER tile z{} r{} c{}", zoom, row, col))
+}
+
+/// Fetch a complete band image from SLIDER at optimal resolution
+async fn fetch_slider_band(
+    client: &reqwest::Client,
+    sat: &str,
+    band: &str,
+    timestamp: i64,
+    date_path: &str,
+    target_size: u32,
+    tile_size: u32,
+) -> Result<image::GrayImage> {
+    let zoom = slider_zoom_for_size(target_size, tile_size);
+    let tiles_per_side = 1u32 << zoom;
+    let total_size = tile_size * tiles_per_side;
+
+    tracing::debug!(
+        "Fetching SLIDER {} band {} at zoom {} ({}x{} = {} tiles)",
+        sat, band, zoom, tiles_per_side, tiles_per_side, tiles_per_side * tiles_per_side
+    );
+
+    let mut composite = image::GrayImage::new(total_size, total_size);
+
+    // Fetch all tiles in parallel
+    let mut handles = Vec::new();
+    for row in 0..tiles_per_side {
+        for col in 0..tiles_per_side {
+            let client = client.clone();
+            let sat = sat.to_string();
+            let band = band.to_string();
+            let date_path = date_path.to_string();
+            handles.push(tokio::spawn(async move {
+                let tile = fetch_slider_tile(&client, &sat, &band, timestamp, &date_path, zoom, row, col).await?;
+                Ok::<_, anyhow::Error>((row, col, tile))
+            }));
+        }
+    }
+
+    for handle in handles {
+        let (row, col, tile) = handle.await??;
+        let gray = tile.to_luma8();
+        composite
+            .copy_from(&gray, col * tile_size, row * tile_size)
+            .with_context(|| format!("Failed to composite tile ({}, {})", row, col))?;
+    }
+
+    Ok(composite)
+}
+
+/// Fetch GK2A true-color image from SLIDER
+/// GK2A has actual RGB bands: band_01=Blue, band_02=Green, band_03=Red
+async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
+    // Use 2200px target to match Himawari level 4 (2200px) - adaptive zoom will pick appropriate level
+    // GK2A tile_size=688, zoom 2 = 2752px which is close
+    let target_size = 2200;
+
+    // Get latest timestamp (all bands should have same timestamp)
+    let (timestamp, date_path) = fetch_slider_timestamp(client, "gk2a", "band_03").await?;
+
+    tracing::info!(
+        "Fetching GK2A true-color (timestamp: {}, target: {}px)",
+        timestamp, target_size
+    );
+
+    // Fetch all three bands in parallel - GK2A has TRUE RGB!
     let (band01, band02, band03) = tokio::try_join!(
-        fetch_goes_band_zip(client, satellite_id, 1),  // Blue
-        fetch_goes_band_zip(client, satellite_id, 2),  // Red  
-        fetch_goes_band_zip(client, satellite_id, 3),  // Veggie (pseudo-green)
+        fetch_slider_band(client, "gk2a", "band_01", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Blue
+        fetch_slider_band(client, "gk2a", "band_02", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Green (TRUE!)
+        fetch_slider_band(client, "gk2a", "band_03", timestamp, &date_path, target_size, GK2A_TILE_SIZE), // Red
     )?;
 
-    tracing::info!("Compositing {} true-color from bands...", name);
+    tracing::info!("Compositing GK2A true-color...");
+
+    let width = band03.width();
+    let height = band03.height();
+
+    let mut composite = RgbaImage::new(width, height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let r = band03.get_pixel(x, y).0[0];
+            let g = band02.get_pixel(x, y).0[0]; // True green!
+            let b = band01.get_pixel(x, y).0[0];
+
+            // Apply light gamma correction for visual consistency
+            let gamma = 1.0 / 1.1;
+            let r_out = (255.0 * (r as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+            let g_out = (255.0 * (g as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+            let b_out = (255.0 * (b as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+
+            composite.put_pixel(x, y, image::Rgba([r_out, g_out, b_out, 255]));
+        }
+    }
+
+    // Parse timestamp: 20260330222000 -> DateTime
+    let ts_str = timestamp.to_string();
+    let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
+        .context("Failed to parse SLIDER timestamp")?
+        .and_utc();
+
+    tracing::info!("GK2A true-color composite complete ({}x{})", width, height);
+
+    Ok((composite, image_time))
+}
+
+/// Fetch Himawari image from SLIDER (fallback when NICT is unavailable)
+/// Himawari has bands: band_01=Blue, band_02=Green, band_03=Red (like GK2A)
+async fn fetch_himawari_image_slider(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
+    let target_size = 2200; // Match NICT level 4
+
+    let (timestamp, date_path) = fetch_slider_timestamp(client, "himawari", "band_03").await?;
+
+    tracing::info!(
+        "Fetching Himawari-9 from SLIDER (timestamp: {}, target: {}px)",
+        timestamp, target_size
+    );
+
+    // Himawari on SLIDER has true RGB bands
+    let (band01, band02, band03) = tokio::try_join!(
+        fetch_slider_band(client, "himawari", "band_01", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, "himawari", "band_02", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, "himawari", "band_03", timestamp, &date_path, target_size, HIMAWARI_SLIDER_TILE_SIZE),
+    )?;
+
+    tracing::info!("Compositing Himawari true-color from SLIDER...");
+
+    let width = band03.width();
+    let height = band03.height();
+    let mut composite = RgbaImage::new(width, height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let r = band03.get_pixel(x, y).0[0];
+            let g = band02.get_pixel(x, y).0[0];
+            let b = band01.get_pixel(x, y).0[0];
+
+            let gamma = 1.0 / 1.1;
+            let r_out = (255.0 * (r as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+            let g_out = (255.0 * (g as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+            let b_out = (255.0 * (b as f32 / 255.0).powf(gamma)).clamp(0.0, 255.0) as u8;
+
+            composite.put_pixel(x, y, image::Rgba([r_out, g_out, b_out, 255]));
+        }
+    }
+
+    let ts_str = timestamp.to_string();
+    let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
+        .context("Failed to parse SLIDER timestamp")?
+        .and_utc();
+
+    tracing::info!("Himawari SLIDER composite complete ({}x{})", width, height);
+
+    Ok((composite, image_time))
+}
+
+/// Fetch GOES satellite via SLIDER (faster than NOAA CDN ZIP files)
+/// GOES bands: band_01=Blue, band_02=Red, band_03=Veggie
+/// Green is synthesized: G = 0.45*R + 0.10*Veggie + 0.45*B
+async fn fetch_goes_image_slider(
+    client: &reqwest::Client,
+    slider_sat: &str,
+    name: &str,
+) -> Result<(RgbaImage, DateTime<Utc>)> {
+    let target_size = 2712; // GOES at zoom 2 = 678 * 4
+
+    let (timestamp, date_path) = fetch_slider_timestamp(client, slider_sat, "band_02").await?;
+
+    tracing::info!(
+        "Fetching {} from SLIDER (timestamp: {}, target: {}px)",
+        name, timestamp, target_size
+    );
+
+    // GOES bands on SLIDER: band_01=Blue, band_02=Red, band_03=Veggie
+    let (band01, band02, band03) = tokio::try_join!(
+        fetch_slider_band(client, slider_sat, "band_01", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, slider_sat, "band_02", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+        fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_SLIDER_TILE_SIZE),
+    )?;
+
+    tracing::info!("Compositing {} true-color from SLIDER...", name);
 
     let width = band02.width();
     let height = band02.height();
-
-    // Create RGBA composite
     let mut composite = RgbaImage::new(width, height);
 
     for y in 0..height {
@@ -298,18 +526,22 @@ async fn fetch_goes_truecolor(
         }
     }
 
-    let timestamp = Utc::now();
-    tracing::info!("{} true-color composite complete", name);
+    let ts_str = timestamp.to_string();
+    let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
+        .context("Failed to parse SLIDER timestamp")?
+        .and_utc();
 
-    Ok((composite, timestamp))
+    tracing::info!("{} SLIDER composite complete ({}x{})", name, width, height);
+
+    Ok((composite, image_time))
 }
 
 async fn fetch_goes_east_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
-    fetch_goes_truecolor(client, "GOES19", "GOES-East").await
+    fetch_goes_image_slider(client, "goes-19", "GOES-East").await
 }
 
 async fn fetch_goes_west_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
-    fetch_goes_truecolor(client, "GOES18", "GOES-West").await
+    fetch_goes_image_slider(client, "goes-18", "GOES-West").await
 }
 
 // ============================================================================
@@ -325,6 +557,7 @@ pub async fn fetch_earth_image(
         Satellite::Himawari => fetch_himawari_image(client).await,
         Satellite::GoesEast => fetch_goes_east_image(client).await,
         Satellite::GoesWest => fetch_goes_west_image(client).await,
+        Satellite::Gk2a => fetch_gk2a_image(client).await,
     }
 }
 
@@ -334,5 +567,6 @@ pub fn cache_filename(satellite: Satellite) -> &'static str {
         Satellite::Himawari => "earth_cache_himawari.png",
         Satellite::GoesEast => "earth_cache_goes_east.png",
         Satellite::GoesWest => "earth_cache_goes_west.png",
+        Satellite::Gk2a => "earth_cache_gk2a.png",
     }
 }

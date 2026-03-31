@@ -1,12 +1,16 @@
 # Live Earth Wallpaper
 
-A native Windows application that displays live Himawari-8 satellite imagery of Earth with an accurate star field as your desktop wallpaper.
+A native Windows application that displays live geostationary satellite imagery of Earth with an accurate star field as your desktop wallpaper.
 
 ![Preview](preview.png)
 
 ## Features
 
-- **Live Earth imagery** from the Himawari-8 geostationary satellite (140.7°E)
+- **Live Earth imagery** from multiple geostationary satellites:
+  - **Himawari-9** (140.7°E) - Asia/Pacific view
+  - **GOES-East** (75.2°W) - Americas/Atlantic view
+  - **GOES-West** (137.2°W) - Pacific/West Americas view
+  - **GK2A** (128.2°E) - Korea/Asia view (true RGB, no synthetic green)
 - **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with ~25,800 stars (mag ≤ 7.5)
 - **Smooth updates** - stars/sun/moon/planets refresh every 60 seconds, Earth image updates every 10 minutes
 - **Realistic Rendering**:
@@ -19,8 +23,9 @@ A native Windows application that displays live Himawari-8 satellite imagery of 
   - **Duplicate**: Each monitor gets its own centered Earth view
 - **High-DPI aware** - renders at native resolution on scaled displays
 - **Offline fallback** - uses cached imagery (shown in grayscale) when network unavailable
-- **System tray** - minimal UI with refresh, mode toggle, labels toggle, and startup options
-- **Lightweight** - ~6MB executable, ~15-30MB memory footprint
+- **Automatic failover** - falls back to alternate data sources if primary is unavailable
+- **System tray** - minimal UI with satellite selection, refresh, mode toggle, labels toggle, and startup options
+- **Lightweight** - ~7-8MB executable, ~20-35MB memory footprint
 
 ## Requirements
 
@@ -58,7 +63,9 @@ Run the application and it will:
 | Option | Description |
 |--------|-------------|
 | **Refresh Now** | Immediately fetch new imagery and update wallpaper |
-| **Mode: Span/Duplicate** | Toggle between multi-monitor modes |
+| **Span Across Monitors** | Toggle between span (continuous) and duplicate (per-monitor) modes |
+| **Show Earth** | Toggle Earth imagery display (stars-only mode when disabled) |
+| **Satellite** | Select data source: Himawari-9, GOES-East, GOES-West, or GK2A |
 | **Show Labels** | Toggle text labels for bright stars, planets, and Moon |
 | **Run on Startup** | Toggle automatic startup with Windows |
 | **Exit** | Close the application |
@@ -107,7 +114,8 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 
 | Data | Source |
 |------|--------|
-| Earth imagery | [NICT Himawari-8](https://himawari8.nict.go.jp/) (10-minute updates) |
+| Earth imagery | [RAMMB SLIDER / CIRA](https://slider.cira.colostate.edu/) (Himawari-9, GOES-East, GOES-West, GK2A) |
+| Himawari fallback | [NICT Science Cloud](https://himawari8.nict.go.jp/) (when SLIDER unavailable) |
 | Star catalog | [HYG Database v4.2](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
 | Planet positions | [NASA JPL](https://ssd.jpl.nasa.gov/planets/approx_pos.html) orbital elements |
 | Moon position | Meeus lunar theory |
@@ -134,21 +142,29 @@ Requires Visual Studio Build Tools with C++ workload:
 cargo build --release
 ```
 
-### Cross-Compiling from Linux/WSL
+### Cross-Compiling from Linux/WSL (NixOS)
 
+**x86_64 Windows:**
 ```bash
-# Using mingw-w64 (NixOS example)
-nix-shell -p pkgsCross.mingwW64.stdenv.cc pkgsCross.mingwW64.windows.pthreads rustup
-rustup target add x86_64-pc-windows-gnu
-export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
-export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
-cargo build --release --target x86_64-pc-windows-gnu
+nix-shell -p rustup pkgsCross.mingwW64.buildPackages.gcc pkgsCross.mingwW64.windows.pthreads \
+  --run "CC=x86_64-w64-mingw32-gcc cargo build --release --target x86_64-pc-windows-gnu"
 ```
+
+**ARM64 Windows:**
+```bash
+nix-shell -p rustup cargo-zigbuild zig \
+  --run "rustup target add aarch64-pc-windows-gnullvm && cargo zigbuild --release --target aarch64-pc-windows-gnullvm"
+```
+
+**Troubleshooting:**
+- If builds hang or fail with linker errors, try `cargo clean` first
+- ARM64 builds require `cargo-zigbuild` due to cross-compilation complexities
+- Ensure rustup targets are installed: `rustup target add x86_64-pc-windows-gnu aarch64-pc-windows-gnullvm`
 
 ## Credits
 
 - Original concept: [Live-Space-View](https://github.com/JoshuaCHolmes/Live-Space-View) (Wallpaper Engine)
-- Satellite imagery: [NICT Science Cloud / Himawari-8](https://himawari8.nict.go.jp/)
+- Satellite imagery: [RAMMB SLIDER / CIRA](https://slider.cira.colostate.edu/) (all satellites)
 - Star data: [HYG Database](https://codeberg.org/astronexus/hyg) by David Nash
 - Orbital elements: [NASA JPL Solar System Dynamics](https://ssd.jpl.nasa.gov/)
 - Moon texture: [NASA SVS](https://svs.gsfc.nasa.gov/)

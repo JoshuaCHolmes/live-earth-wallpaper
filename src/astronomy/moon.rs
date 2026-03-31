@@ -5,7 +5,6 @@ use super::coordinates::{
     Equatorial, ScreenPosition, equatorial_to_screen,
 };
 use chrono::{DateTime, Utc};
-use std::f64::consts::PI;
 
 pub struct Moon {
     // Cached position data
