@@ -11,7 +11,8 @@ A native Windows application that displays live geostationary satellite imagery 
   - **GOES-East** (75.2°W) - Americas/Atlantic view  
   - **GOES-West** (137.2°W) - Pacific/West Americas view
   - **GK2A** (128.2°E) - Korea/Asia view
-- **Consistent color processing** - all satellites use the same GOES-style green synthesis from Blue (0.47µm), Red (0.64µm), and Veggie (0.86µm) bands for uniform appearance
+  - **Meteosat-12** (0°) - Europe/Africa view
+- **Consistent color processing** - all satellites use the same GOES-style green synthesis from Blue, Red, and Veggie bands for uniform appearance
 - **Accurate star field** based on HYG (Hipparcos-Yale-Gliese) catalog with ~25,800 stars (mag ≤ 7.5)
 - **Smooth updates** - stars/sun/moon/planets refresh every 60 seconds, Earth image updates every 10 minutes
 - **Realistic Rendering**:

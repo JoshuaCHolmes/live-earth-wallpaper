@@ -2,27 +2,28 @@
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::f64::consts::PI;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 // Default satellite longitude (Himawari-9 at 140.7°E)
 const DEFAULT_SATELLITE_LONGITUDE: f64 = 140.7;
 
 // Atomic storage for satellite longitude (stored as bits)
 static SATELLITE_LONGITUDE_BITS: AtomicU64 = AtomicU64::new(0);
+static SATELLITE_LONGITUDE_SET: AtomicBool = AtomicBool::new(false);
 
 /// Get current satellite longitude
 pub fn get_satellite_longitude() -> f64 {
-    let bits = SATELLITE_LONGITUDE_BITS.load(Ordering::Relaxed);
-    if bits == 0 {
-        DEFAULT_SATELLITE_LONGITUDE
+    if SATELLITE_LONGITUDE_SET.load(Ordering::Relaxed) {
+        f64::from_bits(SATELLITE_LONGITUDE_BITS.load(Ordering::Relaxed))
     } else {
-        f64::from_bits(bits)
+        DEFAULT_SATELLITE_LONGITUDE
     }
 }
 
 /// Set satellite longitude for coordinate calculations
 pub fn set_satellite_longitude(longitude: f64) {
     SATELLITE_LONGITUDE_BITS.store(longitude.to_bits(), Ordering::Relaxed);
+    SATELLITE_LONGITUDE_SET.store(true, Ordering::Relaxed);
 }
 
 pub const SATELLITE_ALTITUDE_KM: f64 = 35793.0;

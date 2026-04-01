@@ -112,6 +112,7 @@ impl TrayIcon {
                         "sat_goes_east" => Some(TrayCommand::SelectSatellite(Satellite::GoesEast)),
                         "sat_goes_west" => Some(TrayCommand::SelectSatellite(Satellite::GoesWest)),
                         "sat_gk2a" => Some(TrayCommand::SelectSatellite(Satellite::Gk2a)),
+                        "sat_meteosat_12" => Some(TrayCommand::SelectSatellite(Satellite::Meteosat12)),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {

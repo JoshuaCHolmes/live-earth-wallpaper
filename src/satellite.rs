@@ -4,10 +4,11 @@
 //! - Himawari-9 (140.7°E) - Japan/Asia-Pacific  
 //! - GOES-East/GOES-19 (75.2°W) - Americas/Atlantic
 //! - GOES-West/GOES-18 (137.2°W) - Pacific/West Americas
-//! - GK2A (128.2°E) - Korea/Asia (GEO-KOMPSAT-2A)
+//! - GK2A (128.2°E) - Korea/Asia
+//! - Meteosat-12 (0°) - Europe/Africa
 //!
 //! All satellites use consistent GOES-style green synthesis from Blue, Red, and Veggie bands
-//! at matching wavelengths (0.47µm, 0.64µm, 0.86µm) for uniform color appearance.
+//! for uniform color appearance.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -43,8 +44,9 @@ pub enum Satellite {
     /// GOES-West (GOES-18) at 137.2°W (NOAA)
     GoesWest,
     /// GEO-KOMPSAT-2A at 128.2°E (Korea Meteorological Administration)
-    /// Uses RAMMB SLIDER for clean true-RGB imagery
     Gk2a,
+    /// Meteosat-12 at 0° (EUMETSAT) - Europe/Africa view
+    Meteosat12,
 }
 
 impl Satellite {
@@ -55,6 +57,7 @@ impl Satellite {
             Satellite::GoesEast => -75.2,
             Satellite::GoesWest => -137.2,
             Satellite::Gk2a => 128.2,
+            Satellite::Meteosat12 => 0.0,
         }
     }
 
@@ -65,6 +68,7 @@ impl Satellite {
             Satellite::GoesEast => "GOES-East",
             Satellite::GoesWest => "GOES-West",
             Satellite::Gk2a => "GK2A",
+            Satellite::Meteosat12 => "Meteosat-12",
         }
     }
 
@@ -75,7 +79,8 @@ impl Satellite {
             Satellite::Himawari => Satellite::GoesEast,
             Satellite::GoesEast => Satellite::GoesWest,
             Satellite::GoesWest => Satellite::Gk2a,
-            Satellite::Gk2a => Satellite::Himawari,
+            Satellite::Gk2a => Satellite::Meteosat12,
+            Satellite::Meteosat12 => Satellite::Himawari,
         }
     }
 
@@ -86,6 +91,7 @@ impl Satellite {
             Satellite::GoesEast,
             Satellite::GoesWest,
             Satellite::Gk2a,
+            Satellite::Meteosat12,
         ]
     }
 }
@@ -103,6 +109,7 @@ const MAX_SLIDER_METADATA_SIZE: usize = 64 * 1024; // 64KB for timestamps JSON
 const GK2A_TILE_SIZE: u32 = 688;
 const HIMAWARI_TILE_SIZE: u32 = 688;
 const GOES_TILE_SIZE: u32 = 678;
+const METEOSAT12_TILE_SIZE: u32 = 696;
 
 /// SLIDER timestamps response
 #[derive(Debug, serde::Deserialize)]
@@ -391,6 +398,53 @@ async fn fetch_goes_west_image(client: &reqwest::Client) -> Result<(RgbaImage, D
     fetch_goes_image_slider(client, "goes-18", "GOES-West").await
 }
 
+/// Fetch Meteosat-12 image from SLIDER
+/// Meteosat-12 bands: band_01=Blue(0.44µm), band_03=Red(0.64µm), band_04=Veggie(0.865µm)
+async fn fetch_meteosat12_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTime<Utc>)> {
+    let target_size = 2200;
+
+    let (timestamp, date_path) = fetch_slider_timestamp(client, "meteosat-12", "band_03").await?;
+
+    tracing::info!("Fetching Meteosat-12 (timestamp: {})...", timestamp);
+
+    // Fetch Blue, Red, Veggie bands
+    let (band01, band03, band04) = tokio::try_join!(
+        fetch_slider_band(client, "meteosat-12", "band_01", timestamp, &date_path, target_size, METEOSAT12_TILE_SIZE),
+        fetch_slider_band(client, "meteosat-12", "band_03", timestamp, &date_path, target_size, METEOSAT12_TILE_SIZE),
+        fetch_slider_band(client, "meteosat-12", "band_04", timestamp, &date_path, target_size, METEOSAT12_TILE_SIZE),
+    )?;
+
+    tracing::info!("Compositing Meteosat-12...");
+
+    let width = band03.width();
+    let height = band03.height();
+    let mut composite = RgbaImage::new(width, height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let r = band03.get_pixel(x, y).0[0] as f32;
+            let b = band01.get_pixel(x, y).0[0] as f32;
+            let veggie = band04.get_pixel(x, y).0[0] as f32;
+
+            let g = synthesize_green(r, veggie, b);
+            composite.put_pixel(x, y, image::Rgba([apply_gamma(r), apply_gamma(g), apply_gamma(b), 255]));
+        }
+    }
+
+    drop(band01);
+    drop(band03);
+    drop(band04);
+
+    let ts_str = timestamp.to_string();
+    let image_time = NaiveDateTime::parse_from_str(&ts_str, "%Y%m%d%H%M%S")
+        .context("Failed to parse SLIDER timestamp")?
+        .and_utc();
+
+    tracing::info!("Meteosat-12 composite complete ({}x{})", width, height);
+
+    Ok((composite, image_time))
+}
+
 // ============================================================================
 // Unified interface
 // ============================================================================
@@ -405,6 +459,7 @@ pub async fn fetch_earth_image(
         Satellite::GoesEast => fetch_goes_east_image(client).await,
         Satellite::GoesWest => fetch_goes_west_image(client).await,
         Satellite::Gk2a => fetch_gk2a_image(client).await,
+        Satellite::Meteosat12 => fetch_meteosat12_image(client).await,
     }
 }
 
@@ -415,5 +470,6 @@ pub fn cache_filename(satellite: Satellite) -> &'static str {
         Satellite::GoesEast => "earth_cache_goes_east.png",
         Satellite::GoesWest => "earth_cache_goes_west.png",
         Satellite::Gk2a => "earth_cache_gk2a.png",
+        Satellite::Meteosat12 => "earth_cache_meteosat12.png",
     }
 }
