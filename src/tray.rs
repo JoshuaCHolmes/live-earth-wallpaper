@@ -375,7 +375,8 @@ pub mod startup {
             }
 
             let value_name = to_wide(APP_NAME);
-            let exe_str = exe_path.to_string_lossy();
+            // Wrap path in quotes to handle spaces in path
+            let exe_str = format!("\"{}\"", exe_path.to_string_lossy());
             let exe_wide = to_wide(&exe_str);
             let data_bytes: &[u8] = std::slice::from_raw_parts(
                 exe_wide.as_ptr() as *const u8,
