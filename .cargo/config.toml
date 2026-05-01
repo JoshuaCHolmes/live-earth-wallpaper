@@ -1,3 +1,12 @@
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 ar = "x86_64-w64-mingw32-ar"
+
+# windows-gnullvm targets (used with cargo-zigbuild for cross-compilation) need
+# compiler-rt linked explicitly to provide 128-bit integer math builtins
+# (__umodti3, __floattidf, etc.) used by tokio/hyper.
+[target.x86_64-pc-windows-gnullvm]
+rustflags = ["-C", "link-arg=-lcompiler_rt"]
+
+[target.aarch64-pc-windows-gnullvm]
+rustflags = ["-C", "link-arg=-lcompiler_rt"]

@@ -287,14 +287,71 @@ pub mod startup {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, REG_VALUE_TYPE,
+        HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_BINARY, REG_SZ, REG_VALUE_TYPE,
     };
 
     const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const APPROVED_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     const APP_NAME: &str = "LiveEarthWallpaper";
 
     fn to_wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    /// Strip the Mark of the Web (Zone.Identifier alternate data stream) from
+    /// the running executable. Files copied from WSL/network/internet sources
+    /// carry this marker, which causes SmartScreen to silently block auto-launch
+    /// at boot even when registered in the Run key. Removing it lets future
+    /// boots launch the program without user interaction.
+    pub fn strip_motw() {
+        use windows::Win32::Storage::FileSystem::DeleteFileW;
+
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // The ADS path is "<exe>:Zone.Identifier"
+        let ads_path = format!("{}:Zone.Identifier", exe.to_string_lossy());
+        let wide = to_wide(&ads_path);
+        unsafe {
+            // Best-effort: ignore errors (file simply may not have the stream)
+            let result = DeleteFileW(PCWSTR(wide.as_ptr()));
+            if result.is_ok() {
+                tracing::info!("Removed Mark of the Web from executable (auto-start at boot now permitted)");
+            }
+        }
+    }
+
+    /// Write the StartupApproved entry that marks our Run-key registration as
+    /// "enabled" in Windows Settings → Startup Apps. Without this, modern Windows
+    /// can silently refuse to launch our entry on boot.
+    /// Format: 12 bytes; first byte 0x02 = enabled, 0x03 = disabled.
+    fn set_approved(enabled: bool) {
+        unsafe {
+            let key_path = to_wide(APPROVED_KEY);
+            let mut hkey = HKEY::default();
+            if RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                PCWSTR(key_path.as_ptr()),
+                0,
+                KEY_WRITE,
+                &mut hkey,
+            ).is_err() {
+                return;
+            }
+            let value_name = to_wide(APP_NAME);
+            let mut data = [0u8; 12];
+            data[0] = if enabled { 0x02 } else { 0x03 };
+            let _ = RegSetValueExW(
+                hkey,
+                PCWSTR(value_name.as_ptr()),
+                0,
+                REG_BINARY,
+                Some(&data),
+            );
+            let _ = RegCloseKey(hkey);
+        }
     }
 
     /// Check if the app is set to run on startup
@@ -357,6 +414,76 @@ pub mod startup {
         }
     }
 
+    /// If startup is registered but points to a different exe path (e.g. exe was moved),
+    /// automatically update the registry. Called on each launch.
+    pub fn sync_path() {
+        if let Ok(current_exe) = std::env::current_exe() {
+            let current_lower = current_exe.to_string_lossy().to_lowercase();
+
+            // Check if a startup entry exists at all
+            unsafe {
+                let key_path = to_wide(RUN_KEY);
+                let mut hkey = HKEY::default();
+                if RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    PCWSTR(key_path.as_ptr()),
+                    0,
+                    KEY_READ,
+                    &mut hkey,
+                ).is_err() {
+                    return;
+                }
+
+                let value_name = to_wide(APP_NAME);
+                let mut data_type = REG_VALUE_TYPE::default();
+                let mut data_size = 0u32;
+                let exists = RegQueryValueExW(
+                    hkey,
+                    PCWSTR(value_name.as_ptr()),
+                    None,
+                    Some(&mut data_type),
+                    None,
+                    Some(&mut data_size),
+                ).is_ok() && data_size > 0;
+
+                if !exists {
+                    let _ = RegCloseKey(hkey);
+                    return;
+                }
+
+                let mut data = vec![0u8; data_size as usize];
+                let read_ok = RegQueryValueExW(
+                    hkey,
+                    PCWSTR(value_name.as_ptr()),
+                    None,
+                    Some(&mut data_type),
+                    Some(data.as_mut_ptr()),
+                    Some(&mut data_size),
+                ).is_ok();
+                let _ = RegCloseKey(hkey);
+
+                if !read_ok {
+                    return;
+                }
+
+                let wide: &[u16] = std::slice::from_raw_parts(data.as_ptr() as *const u16, data.len() / 2);
+                let registered = String::from_utf16_lossy(wide)
+                    .trim_end_matches('\0')
+                    .trim_matches('"')
+                    .to_lowercase();
+
+                if registered != current_lower {
+                    tracing::info!("Startup path changed, updating registry: {} -> {}", registered, current_lower);
+                    let _ = set_startup_value(&current_exe);
+                }
+
+                // Always ensure the StartupApproved entry is present and enabled
+                // so Windows doesn't silently disable our auto-launch.
+                set_approved(true);
+            }
+        }
+    }
+
     fn set_startup_value(exe_path: &PathBuf) -> Result<()> {
         unsafe {
             let key_path = to_wide(RUN_KEY);
@@ -396,7 +523,11 @@ pub mod startup {
             if result.is_err() {
                 anyhow::bail!("Failed to set registry value: {:?}", result);
             }
-            
+
+            // Mark as enabled in StartupApproved so Settings → Startup Apps
+            // doesn't suppress our auto-launch.
+            set_approved(true);
+
             tracing::info!("Enabled run on startup");
             Ok(())
         }
@@ -424,6 +555,9 @@ pub mod startup {
             let result = RegDeleteValueW(hkey, PCWSTR(value_name.as_ptr()));
             let _ = RegCloseKey(hkey);
             
+            // Mark as disabled in StartupApproved so Settings reflects state
+            set_approved(false);
+
             // Ignore error if value doesn't exist
             if result.is_ok() {
                 tracing::info!("Disabled run on startup");

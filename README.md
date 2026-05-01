@@ -161,6 +161,7 @@ nix-shell -p rustup cargo-zigbuild zig \
 - If builds hang or fail with linker errors, try `cargo clean` first
 - ARM64 builds require `cargo-zigbuild` due to cross-compilation complexities
 - Ensure rustup targets are installed: `rustup target add x86_64-pc-windows-gnu aarch64-pc-windows-gnullvm`
+- The `gnullvm` targets need compiler-rt linked explicitly; this is configured in `.cargo/config.toml` via `-lcompiler_rt`. If you see undefined symbols like `__umodti3` or `__floattidf`, ensure that linker arg is in place.
 
 ## Credits
 

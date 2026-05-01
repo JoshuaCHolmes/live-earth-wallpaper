@@ -62,13 +62,34 @@ fn main() -> Result<()> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
+    // Initialize logging - write to file so startup failures are diagnosable
+    // (no console available with windows_subsystem = "windows")
+    let log_file = wallpaper::wallpaper_dir()
+        .ok()
+        .and_then(|dir| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("app.log"))
+                .ok()
+        });
+
+    if let Some(file) = log_file {
+        tracing_subscriber::fmt()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+    }
 
     tracing::info!("Live Earth Wallpaper v{}", env!("CARGO_PKG_VERSION"));
 
@@ -105,6 +126,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     // Current mode (mutable)
     let mut current_mode = initial_mode;
 
+    // Sync startup registry path with current exe location (handles moved exe)
+    startup::sync_path();
+
+    // Strip Mark of the Web from the executable so SmartScreen won't silently
+    // block our auto-launch at boot. Safe no-op if the marker isn't present.
+    startup::strip_motw();
+
     // Check current startup state
     let startup_enabled = startup::is_enabled();
     tracing::info!("Run on startup: {}", if startup_enabled { "enabled" } else { "disabled" });
@@ -120,8 +148,19 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     let mut current_satellite = Satellite::GoesEast;
     tracing::info!("Satellite: {}", current_satellite.name());
 
-    // Create tray icon
-    let tray = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite)?;
+    // Try creating tray icon with retries — at startup the shell may not be ready yet
+    let tray = {
+        let mut result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite);
+        for attempt in 1..=5u32 {
+            if result.is_ok() {
+                break;
+            }
+            tracing::warn!("Tray creation failed (attempt {}), retrying in 3s...", attempt);
+            std::thread::sleep(Duration::from_secs(3));
+            result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite);
+        }
+        result?
+    };
     tracing::info!("System tray icon created");
 
     // Create async runtime
@@ -169,8 +208,10 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     
     let mut last_full_update = std::time::Instant::now();
     let mut last_star_refresh = std::time::Instant::now();
+    let mut last_monitor_check = std::time::Instant::now();
     let full_update_interval = Duration::from_secs(FULL_UPDATE_INTERVAL_MINUTES * 60);
     let star_refresh_interval = Duration::from_secs(STAR_REFRESH_INTERVAL_SECS);
+    let monitor_check_interval = Duration::from_secs(5);
 
     tracing::info!(
         "Full updates every {} min, star refresh every {} sec.",
@@ -188,9 +229,10 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
             // These events can indicate system state changes, check monitor layout
         }
         
-        // Periodically check if monitor configuration changed (every poll cycle)
-        // This catches WM_DISPLAYCHANGE indirectly via layout detection
-        if let Ok(new_layout) = monitor::MonitorLayout::detect() {
+        // Check monitor layout periodically (not every event loop tick)
+        if last_monitor_check.elapsed() >= monitor_check_interval {
+            last_monitor_check = std::time::Instant::now();
+            if let Ok(new_layout) = monitor::MonitorLayout::detect() {
             let new_state = (new_layout.monitors.len(), new_layout.total_width, new_layout.total_height);
             if new_state != current_layout {
                 tracing::info!(
@@ -212,6 +254,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                 }
             }
+        }
         }
 
         // Check for tray commands

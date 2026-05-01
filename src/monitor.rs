@@ -142,7 +142,7 @@ fn detect_windows_monitors() -> Result<MonitorLayout> {
     let total_width = (max_x - min_x) as u32;
     let total_height = (max_y - min_y) as u32;
 
-    tracing::info!(
+    tracing::debug!(
         "Detected {} monitor(s): {}x{} total",
         monitors.len(),
         total_width,
