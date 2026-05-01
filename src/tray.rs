@@ -9,6 +9,7 @@
 
 use crate::monitor::MultiMonitorMode;
 use crate::satellite::Satellite;
+use crate::wallpaper::WallpaperTarget;
 
 /// Commands that can be triggered from the tray menu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +20,7 @@ pub enum TrayCommand {
     ToggleLabels,
     ToggleStartup,
     SelectSatellite(Satellite),
+    SelectTarget(WallpaperTarget),
     Exit,
 }
 
@@ -35,13 +37,14 @@ pub struct TrayIcon {
     mode_item: MenuItem,
     earth_item: MenuItem,
     satellite_items: Vec<MenuItem>,
+    target_items: Vec<MenuItem>,
     labels_item: MenuItem,
     startup_item: MenuItem,
 }
 
 #[cfg(windows)]
 impl TrayIcon {
-    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool, current_satellite: Satellite) -> anyhow::Result<Self> {
+    pub fn new(startup_enabled: bool, mode: MultiMonitorMode, labels_enabled: bool, earth_enabled: bool, current_satellite: Satellite, current_target: WallpaperTarget) -> anyhow::Result<Self> {
         use anyhow::Context;
         use tray_icon::menu::{Menu, MenuEvent, PredefinedMenuItem, Submenu};
         use tray_icon::TrayIconBuilder;
@@ -69,6 +72,21 @@ impl TrayIcon {
         }
         
         let labels_item = MenuItem::with_id("labels", Self::labels_label(labels_enabled), true, None);
+
+        // Apply To submenu (Desktop / Lock Screen / Both)
+        let target_menu = Submenu::new("Apply To", true);
+        let mut target_items = Vec::new();
+        for &t in &[WallpaperTarget::Desktop, WallpaperTarget::LockScreen, WallpaperTarget::Both] {
+            let id = format!("target_{}", match t {
+                WallpaperTarget::Desktop => "desktop",
+                WallpaperTarget::LockScreen => "lockscreen",
+                WallpaperTarget::Both => "both",
+            });
+            let item = MenuItem::with_id(id, Self::target_label(t, current_target), true, None);
+            target_menu.append(&item)?;
+            target_items.push(item);
+        }
+
         let startup_item = MenuItem::with_id("startup", Self::startup_label(startup_enabled), true, None);
         let separator = PredefinedMenuItem::separator();
         let exit_item = MenuItem::with_id("exit", "Exit", true, None);
@@ -78,6 +96,7 @@ impl TrayIcon {
         menu.append(&earth_item)?;
         menu.append(&satellite_menu)?;
         menu.append(&labels_item)?;
+        menu.append(&target_menu)?;
         menu.append(&startup_item)?;
         menu.append(&separator)?;
         menu.append(&exit_item)?;
@@ -113,6 +132,9 @@ impl TrayIcon {
                         "sat_goes_west" => Some(TrayCommand::SelectSatellite(Satellite::GoesWest)),
                         "sat_gk2a" => Some(TrayCommand::SelectSatellite(Satellite::Gk2a)),
                         "sat_meteosat_12" => Some(TrayCommand::SelectSatellite(Satellite::Meteosat12)),
+                        "target_desktop" => Some(TrayCommand::SelectTarget(WallpaperTarget::Desktop)),
+                        "target_lockscreen" => Some(TrayCommand::SelectTarget(WallpaperTarget::LockScreen)),
+                        "target_both" => Some(TrayCommand::SelectTarget(WallpaperTarget::Both)),
                         _ => None,
                     };
                     if let Some(cmd) = cmd {
@@ -130,6 +152,7 @@ impl TrayIcon {
             mode_item,
             earth_item,
             satellite_items,
+            target_items,
             labels_item,
             startup_item,
         })
@@ -162,6 +185,14 @@ impl TrayIcon {
         if enabled { "✓ Run on Startup" } else { "Run on Startup" }
     }
 
+    fn target_label(t: WallpaperTarget, current: WallpaperTarget) -> String {
+        if t == current {
+            format!("✓ {}", t.label())
+        } else {
+            t.label().to_string()
+        }
+    }
+
     /// Update the mode menu item text
     pub fn set_mode(&self, mode: MultiMonitorMode) {
         let _ = self.mode_item.set_text(Self::mode_label(mode));
@@ -189,6 +220,16 @@ impl TrayIcon {
     /// Update the startup menu item text
     pub fn set_startup(&self, enabled: bool) {
         let _ = self.startup_item.set_text(Self::startup_label(enabled));
+    }
+
+    /// Update the target submenu items
+    pub fn set_target(&self, current: WallpaperTarget) {
+        let order = [WallpaperTarget::Desktop, WallpaperTarget::LockScreen, WallpaperTarget::Both];
+        for (i, t) in order.iter().enumerate() {
+            if let Some(item) = self.target_items.get(i) {
+                let _ = item.set_text(Self::target_label(*t, current));
+            }
+        }
     }
 
     /// Check for pending tray commands (non-blocking)

@@ -6,7 +6,7 @@
 use anyhow::Result;
 
 /// How to handle multiple monitors
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum MultiMonitorMode {
     /// Single image spans across all monitors (Earth centered on virtual desktop)
     #[default]
@@ -64,6 +64,26 @@ impl MonitorLayout {
     #[allow(dead_code)]
     pub fn primary(&self) -> Option<&Monitor> {
         self.monitors.iter().find(|m| m.is_primary)
+    }
+
+    /// Build a layout containing only the primary monitor, normalized to (0,0).
+    /// Used for rendering the lock screen image at single-monitor size.
+    pub fn primary_only(&self) -> Option<MonitorLayout> {
+        let p = self.primary()?;
+        let primary = Monitor {
+            x: 0,
+            y: 0,
+            width: p.width,
+            height: p.height,
+            is_primary: true,
+            name: p.name.clone(),
+        };
+        Some(MonitorLayout {
+            monitors: vec![primary],
+            total_width: p.width,
+            total_height: p.height,
+            bounds: (0, 0, p.width as i32, p.height as i32),
+        })
     }
 }
 

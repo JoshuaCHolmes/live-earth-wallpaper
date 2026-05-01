@@ -48,6 +48,10 @@ windows = { version = "0.58", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    "Foundation",
+    "Storage",
+    "Storage_Streams",
+    "System_UserProfile",
 ] }
 tray-icon = "0.19"
 winit = { version = "0.30", features = ["rwh_06"] }

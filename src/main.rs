@@ -7,6 +7,7 @@
 #![windows_subsystem = "windows"]
 
 mod astronomy;
+mod config;
 mod monitor;
 mod moon_texture;
 mod renderer;
@@ -147,9 +148,6 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     use winit::event::Event;
     use winit::event_loop::{ControlFlow, EventLoop};
 
-    // Current mode (mutable)
-    let mut current_mode = initial_mode;
-
     // Sync startup registry path with current exe location (handles moved exe)
     startup::sync_path();
 
@@ -160,28 +158,48 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     // Check current startup state
     let startup_enabled = startup::is_enabled();
     tracing::info!("Run on startup: {}", if startup_enabled { "enabled" } else { "disabled" });
+
+    // Load persisted settings (target, mode, satellite, labels, earth toggle).
+    // CLI --duplicate flag, when present, overrides persisted mode for this session.
+    let cfg = config::load();
+    let cli_forces_duplicate = initial_mode == MultiMonitorMode::Duplicate
+        && cfg.mode == MultiMonitorMode::Span;
+    let mut current_mode = if cli_forces_duplicate { initial_mode } else { cfg.mode };
+    let mut show_labels = cfg.show_labels;
+    let mut show_earth = cfg.show_earth;
+    let mut current_satellite = cfg.satellite;
+    let mut current_target = cfg.target;
+
     tracing::info!("Monitor mode: {:?}", current_mode);
-
-    // Labels state
-    let mut show_labels = false;
-
-    // Earth display state (default on)
-    let mut show_earth = true;
-
-    // Current satellite
-    let mut current_satellite = Satellite::GoesEast;
     tracing::info!("Satellite: {}", current_satellite.name());
+    tracing::info!("Show Earth: {}, Show Labels: {}", show_earth, show_labels);
+    tracing::info!("Apply to: {}", current_target.label());
+
+    // Helper macro to snapshot current settings into the on-disk config.
+    // Inlined as a macro because the surrounding event loop closure moves all
+    // captured state, and a Fn closure capturing the values would block updates.
+    macro_rules! save_cfg {
+        () => {
+            config::save(&config::Config {
+                target: current_target,
+                mode: current_mode,
+                show_earth,
+                show_labels,
+                satellite: current_satellite,
+            });
+        };
+    }
 
     // Try creating tray icon with retries — at startup the shell may not be ready yet
     let tray = {
-        let mut result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite);
+        let mut result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite, current_target);
         for attempt in 1..=5u32 {
             if result.is_ok() {
                 break;
             }
             tracing::warn!("Tray creation failed (attempt {}), retrying in 3s...", attempt);
             std::thread::sleep(Duration::from_secs(3));
-            result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite);
+            result = TrayIcon::new(startup_enabled, current_mode, show_labels, show_earth, current_satellite, current_target);
         }
         result?
     };
@@ -209,7 +227,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
     let mut cached_earth_timestamp: Option<chrono::DateTime<Utc>> = None;
     let mut is_stale = false;
     if show_earth {
-        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
             Ok((_earth_img, timestamp, stale)) => {
                 // Don't keep image in memory - use disk cache instead
                 cached_earth_timestamp = Some(timestamp);
@@ -222,8 +240,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         }
     } else {
         // Stars-only mode
-        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
             tracing::error!("Initial stars-only update failed: {}", e);
+        }
+    }
+    if current_target.includes_lockscreen() {
+        if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+            tracing::error!("Initial lock screen update failed: {}", e);
         }
     }
 
@@ -269,12 +292,17 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 // Re-render with new monitor configuration
                 tracing::info!("Re-rendering wallpaper for new display configuration...");
                 if show_earth && cached_earth_timestamp.is_some() {
-                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale, current_target.includes_desktop())) {
                         tracing::error!("Display change re-render failed: {}", e);
                     }
                 } else if !show_earth {
-                    if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                    if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                         tracing::error!("Display change re-render failed: {}", e);
+                    }
+                }
+                if current_target.includes_lockscreen() {
+                    if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                        tracing::error!("Lock screen update on display change failed: {}", e);
                     }
                 }
             }
@@ -287,7 +315,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 TrayCommand::RefreshNow => {
                     tracing::info!("Manual refresh requested");
                     if show_earth {
-                        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+                        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             Ok((_earth_img, timestamp, stale)) => {
                                 cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
@@ -298,8 +326,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                             }
                         }
                     } else {
-                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             tracing::error!("Stars-only refresh failed: {}", e);
+                        }
+                    }
+                    if current_target.includes_lockscreen() {
+                        if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                            tracing::error!("Lock screen refresh failed: {}", e);
                         }
                     }
                     last_full_update = std::time::Instant::now();
@@ -311,14 +344,15 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         MultiMonitorMode::Duplicate => MultiMonitorMode::Span,
                     };
                     tray.set_mode(current_mode);
+                    save_cfg!();
                     tracing::info!("Switched to {:?} mode", current_mode);
                     // Immediate refresh to apply mode change
                     if show_earth && cached_earth_timestamp.is_some() {
-                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale, current_target.includes_desktop())) {
                             tracing::error!("Mode switch refresh failed: {}", e);
                         }
                     } else if !show_earth {
-                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             tracing::error!("Mode switch refresh failed: {}", e);
                         }
                     }
@@ -326,11 +360,12 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 TrayCommand::ToggleEarth => {
                     show_earth = !show_earth;
                     tray.set_earth(show_earth);
+                    save_cfg!();
                     tracing::info!("Earth display {}", if show_earth { "enabled" } else { "disabled" });
                     // Immediate refresh
                     if show_earth {
                         // Fetch fresh Earth image when re-enabling
-                        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+                        match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             Ok((_earth_img, timestamp, stale)) => {
                                 cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
@@ -342,8 +377,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         }
                         last_full_update = std::time::Instant::now();
                     } else {
-                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             tracing::error!("Stars-only refresh failed: {}", e);
+                        }
+                    }
+                    if current_target.includes_lockscreen() {
+                        if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                            tracing::error!("Lock screen update failed: {}", e);
                         }
                     }
                     last_star_refresh = std::time::Instant::now();
@@ -351,15 +391,21 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 TrayCommand::ToggleLabels => {
                     show_labels = !show_labels;
                     tray.set_labels(show_labels);
+                    save_cfg!();
                     tracing::info!("Labels {}", if show_labels { "enabled" } else { "disabled" });
                     // Immediate refresh to show/hide labels
                     if show_earth && cached_earth_timestamp.is_some() {
-                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale)) {
+                        if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale, current_target.includes_desktop())) {
                             tracing::error!("Label refresh failed: {}", e);
                         }
                     } else if !show_earth {
-                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                        if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                             tracing::error!("Label refresh failed: {}", e);
+                        }
+                    }
+                    if current_target.includes_lockscreen() {
+                        if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                            tracing::error!("Lock screen label refresh failed: {}", e);
                         }
                     }
                 }
@@ -381,11 +427,12 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     if sat != current_satellite {
                         current_satellite = sat;
                         tray.set_satellite(current_satellite);
+                        save_cfg!();
                         tracing::info!("Switched to satellite: {}", current_satellite.name());
                         // Clear cache and fetch new image
                         cached_earth_timestamp = None;
                         if show_earth {
-                            match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+                            match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                                 Ok((_earth_img, timestamp, stale)) => {
                                     cached_earth_timestamp = Some(timestamp);
                                     is_stale = stale;
@@ -397,11 +444,43 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                             }
                             last_full_update = std::time::Instant::now();
                         } else {
-                            if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                            if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                                 tracing::error!("Satellite switch refresh failed: {}", e);
                             }
                         }
+                        if current_target.includes_lockscreen() {
+                            if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                                tracing::error!("Lock screen satellite switch failed: {}", e);
+                            }
+                        }
                         last_star_refresh = std::time::Instant::now();
+                    }
+                }
+                TrayCommand::SelectTarget(t) => {
+                    if t != current_target {
+                        let prev = current_target;
+                        current_target = t;
+                        tray.set_target(current_target);
+                        save_cfg!();
+                        tracing::info!("Apply to: {}", current_target.label());
+                        // If desktop was just newly included, push a fresh desktop render+set
+                        // (the cached PNG might be stale if we'd been LockScreen-only)
+                        if current_target.includes_desktop() && !prev.includes_desktop() {
+                            if show_earth && cached_earth_timestamp.is_some() {
+                                if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, is_stale, true)) {
+                                    tracing::error!("Desktop apply failed: {}", e);
+                                }
+                            } else if !show_earth {
+                                if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, true)) {
+                                    tracing::error!("Desktop apply failed: {}", e);
+                                }
+                            }
+                        }
+                        if current_target.includes_lockscreen() && !prev.includes_lockscreen() {
+                            if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                                tracing::error!("Lock screen apply failed: {}", e);
+                            }
+                        }
                     }
                 }
                 TrayCommand::Exit => {
@@ -416,7 +495,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         // Check for full scheduled update (fetch new Earth image) - only if Earth is shown
         if show_earth && last_full_update.elapsed() >= full_update_interval {
             tracing::debug!("Scheduled full update starting...");
-            match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+            match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                 Ok((_earth_img, timestamp, stale)) => {
                     cached_earth_timestamp = Some(timestamp);
                     is_stale = stale;
@@ -424,6 +503,11 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 Err(e) => {
                     tracing::error!("Scheduled update failed: {}", e);
                     is_stale = true;
+                }
+            }
+            if current_target.includes_lockscreen() {
+                if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, is_stale)) {
+                    tracing::error!("Scheduled lock screen update failed: {}", e);
                 }
             }
             last_full_update = std::time::Instant::now();
@@ -435,19 +519,28 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                 if is_stale {
                     // We're using stale data - try to fetch fresh Earth image
                     tracing::info!("Stale data detected, attempting to fetch fresh Earth image...");
-                    match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
+                    match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                         Ok((_earth_img, timestamp, stale)) => {
                             cached_earth_timestamp = Some(timestamp);
                             is_stale = stale;
                             if !stale {
                                 tracing::info!("Successfully recovered from stale state!");
+                                // Push the recovered (full color) image to the lock screen too,
+                                // so a LockScreen-only user isn't stuck on grayscale.
+                                if current_target.includes_lockscreen() {
+                                    if let Err(e) = rt.block_on(render_and_apply_lockscreen(show_labels, current_satellite, show_earth, false)) {
+                                        tracing::error!("Lock screen recovery update failed: {}", e);
+                                    }
+                                }
                             }
                         }
                         Err(e) => {
                             tracing::debug!("Still unable to fetch fresh image: {}", e);
-                            // Fall back to star refresh with cached (grayscale) image
+                            // Fall back to star refresh with cached (grayscale) image.
+                            // No lock screen update here — it's already grayscale from a prior cycle,
+                            // and re-applying every minute would be wasted WinRT API churn.
                             if cached_earth_timestamp.is_some() {
-                                if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, true)) {
+                                if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, true, current_target.includes_desktop())) {
                                     tracing::error!("Star refresh failed: {}", e);
                                 }
                             }
@@ -455,14 +548,14 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                 } else if cached_earth_timestamp.is_some() {
                     tracing::debug!("Star refresh (using disk cache)...");
-                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, false)) {
+                    if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, false, current_target.includes_desktop())) {
                         tracing::error!("Star refresh failed: {}", e);
                     }
                 }
             } else {
                 // Stars-only mode refresh
                 tracing::debug!("Star refresh (no Earth)...");
-                if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
+                if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite, current_target.includes_desktop())) {
                     tracing::error!("Stars-only refresh failed: {}", e);
                 }
             }
@@ -504,7 +597,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
         // Initial update
         let mut cached_earth_timestamp: Option<DateTime<Utc>> = None;
         let mut is_stale = false;
-        match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
+        match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite, true).await {
             Ok((_earth_img, timestamp, stale)) => {
                 cached_earth_timestamp = Some(timestamp);
                 is_stale = stale;
@@ -527,7 +620,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         break;
                     }
                     tracing::info!("Scheduled full update starting...");
-                    match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
+                    match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite, true).await {
                         Ok((_earth_img, timestamp, stale)) => {
                             cached_earth_timestamp = Some(timestamp);
                             is_stale = stale;
@@ -544,7 +637,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                     }
                     if is_stale {
                         // Try to recover from stale state
-                        match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite).await {
+                        match fetch_and_update_wallpaper(initial_mode, show_labels, current_satellite, true).await {
                             Ok((_earth_img, timestamp, stale)) => {
                                 cached_earth_timestamp = Some(timestamp);
                                 is_stale = stale;
@@ -552,13 +645,13 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                             Err(_) => {
                                 // Keep using cached image from disk
                                 if cached_earth_timestamp.is_some() {
-                                    let _ = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, true).await;
+                                    let _ = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, true, true).await;
                                 }
                             }
                         }
                     } else if cached_earth_timestamp.is_some() {
                         tracing::debug!("Star refresh...");
-                        if let Err(e) = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, false).await {
+                        if let Err(e) = render_with_disk_cached_earth(initial_mode, show_labels, current_satellite, false, true).await {
                             tracing::error!("Star refresh failed: {}", e);
                         }
                     }
@@ -653,6 +746,7 @@ async fn fetch_and_update_wallpaper(
     mode: monitor::MultiMonitorMode,
     show_labels: bool,
     sat: Satellite,
+    apply_to_desktop: bool,
 ) -> Result<(image::RgbaImage, DateTime<Utc>, bool)> {
     let start = std::time::Instant::now();
     
@@ -706,7 +800,9 @@ async fn fetch_and_update_wallpaper(
     let wallpaper_dir = wallpaper::wallpaper_dir()?;
     let wallpaper_path = wallpaper_dir.join("current_wallpaper.png");
     wallpaper_image.save(&wallpaper_path).context("Failed to save wallpaper")?;
-    wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    if apply_to_desktop {
+        wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    }
 
     let elapsed = start.elapsed();
     tracing::debug!("Full update complete in {:.1}s", elapsed.as_secs_f64());
@@ -728,6 +824,7 @@ async fn render_with_disk_cached_earth(
     show_labels: bool,
     sat: Satellite,
     is_stale: bool,
+    apply_to_desktop: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
     
@@ -757,7 +854,9 @@ async fn render_with_disk_cached_earth(
     let wallpaper_dir = wallpaper::wallpaper_dir()?;
     let wallpaper_path = wallpaper_dir.join("current_wallpaper.png");
     wallpaper_image.save(&wallpaper_path).context("Failed to save wallpaper")?;
-    wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    if apply_to_desktop {
+        wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    }
 
     let elapsed = start.elapsed();
     tracing::debug!("Star refresh complete in {:.1}ms (Earth from {} cache)", 
@@ -772,6 +871,7 @@ async fn render_stars_only_wallpaper(
     mode: monitor::MultiMonitorMode,
     show_labels: bool,
     sat: Satellite,
+    apply_to_desktop: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
     
@@ -800,11 +900,62 @@ async fn render_stars_only_wallpaper(
     let wallpaper_dir = wallpaper::wallpaper_dir()?;
     let wallpaper_path = wallpaper_dir.join("current_wallpaper.png");
     wallpaper_image.save(&wallpaper_path).context("Failed to save wallpaper")?;
-    wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    if apply_to_desktop {
+        wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
+    }
 
     let elapsed = start.elapsed();
     tracing::debug!("Stars-only render complete in {:.1}ms", elapsed.as_millis());
 
+    Ok(())
+}
+
+/// Render a primary-monitor-sized image and apply it as the Windows lock screen.
+/// Uses the on-disk cached Earth image (already populated by the desktop render
+/// path), so this is purely a render+set step — no extra network fetch.
+async fn render_and_apply_lockscreen(
+    show_labels: bool,
+    sat: Satellite,
+    show_earth: bool,
+    is_stale: bool,
+) -> Result<()> {
+    let layout = monitor::MonitorLayout::detect()
+        .context("Failed to detect monitors for lock screen render")?;
+    let primary_layout = layout
+        .primary_only()
+        .context("No primary monitor detected")?;
+
+    let render_time = Utc::now();
+    let mut renderer = renderer::Renderer::new();
+    renderer.set_show_labels(show_labels);
+    renderer.set_satellite_longitude(sat.longitude());
+
+    let img = if show_earth {
+        let (mut earth, _ts) = match load_cached_earth_image(sat) {
+            Ok(v) => v,
+            Err(_) => {
+                // No cache yet (first run before initial fetch succeeded) — skip
+                tracing::debug!("Skipping lock screen update: no cached Earth image yet");
+                return Ok(());
+            }
+        };
+        if is_stale {
+            earth = convert_to_grayscale(&earth);
+        }
+        renderer
+            .render(&earth, &primary_layout, monitor::MultiMonitorMode::Duplicate, &render_time)
+            .context("Failed to render lock screen image")?
+    } else {
+        renderer
+            .render_stars_only(&primary_layout, monitor::MultiMonitorMode::Duplicate, &render_time)
+            .context("Failed to render lock screen image (stars only)")?
+    };
+
+    let dir = wallpaper::wallpaper_dir()?;
+    let path = dir.join("current_lockscreen.png");
+    img.save(&path).context("Failed to save lock screen image")?;
+    wallpaper::set_lock_screen(&path).context("Failed to apply lock screen")?;
+    tracing::debug!("Lock screen updated ({}x{})", primary_layout.total_width, primary_layout.total_height);
     Ok(())
 }
 

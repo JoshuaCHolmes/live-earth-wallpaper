@@ -34,7 +34,7 @@ fn apply_gamma(value: f32) -> u8 {
 }
 
 /// Available geostationary satellites
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Satellite {
     /// Himawari-9 at 140.7°E (Japan Meteorological Agency)
     #[default]
