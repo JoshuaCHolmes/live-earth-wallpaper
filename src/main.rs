@@ -62,48 +62,69 @@ fn main() -> Result<()> {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    // Initialize logging - write to file so startup failures are diagnosable
-    // (no console available with windows_subsystem = "windows")
-    // Truncate on each launch so the file stays bounded; this app runs 24/7 and
-    // the log's purpose is post-mortem of the current session, not history.
-    let log_file = wallpaper::wallpaper_dir()
-        .ok()
-        .and_then(|dir| {
+    // Parse command line arguments early so logging setup can use them
+    let args: Vec<String> = std::env::args().collect();
+    let duplicate_mode = args.contains(&"--duplicate".to_string());
+    let logs_enabled = args.contains(&"--logs".to_string())
+        || args.contains(&"--verbose".to_string());
+    let verbose = args.contains(&"--verbose".to_string());
+    let initial_mode = if duplicate_mode {
+        MultiMonitorMode::Duplicate
+    } else {
+        MultiMonitorMode::Span
+    };
+
+    // Initialize logging.
+    // By default we don't write any log file — the app is a long-running
+    // background process and the file would just sit unused. Pass --logs (or
+    // --verbose for DEBUG-level) to enable file logging for troubleshooting.
+    // The file is truncated on each launch so it stays bounded.
+    let level = if verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+    let log_file = if logs_enabled {
+        wallpaper::wallpaper_dir().ok().and_then(|dir| {
             std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
                 .open(dir.join("app.log"))
                 .ok()
-        });
+        })
+    } else {
+        None
+    };
 
     if let Some(file) = log_file {
         tracing_subscriber::fmt()
             .with_writer(std::sync::Mutex::new(file))
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive(tracing::Level::INFO.into()),
+                    .add_directive(level.into()),
             )
             .init();
     } else {
+        // No file logging: still init a subscriber so tracing macros are no-ops
+        // cheaply rather than dropping events from an uninit'd dispatcher.
+        // Writes go to stderr, which is invisible under windows_subsystem="windows"
+        // but useful when launched from a terminal.
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive(tracing::Level::INFO.into()),
+                    .add_directive(level.into()),
             )
             .init();
     }
 
     tracing::info!("Live Earth Wallpaper v{}", env!("CARGO_PKG_VERSION"));
-
-    // Parse command line arguments
-    let args: Vec<String> = std::env::args().collect();
-    let duplicate_mode = args.contains(&"--duplicate".to_string());
-    let initial_mode = if duplicate_mode {
-        MultiMonitorMode::Duplicate
-    } else {
-        MultiMonitorMode::Span
-    };
+    if logs_enabled {
+        tracing::info!(
+            "File logging enabled ({})",
+            if verbose { "verbose/DEBUG" } else { "INFO" }
+        );
+    }
 
     // Check for --update-once flag for testing
     if args.contains(&"--update-once".to_string()) {

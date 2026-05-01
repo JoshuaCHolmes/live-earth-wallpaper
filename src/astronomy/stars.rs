@@ -126,7 +126,7 @@ impl StarCatalog {
             })
             .collect();
         
-        tracing::info!(
+        tracing::debug!(
             "Loaded {} stars (mag <= {:.1}) from HYG catalog",
             self.stars.len(),
             self.max_magnitude

@@ -86,6 +86,13 @@ live-earth-wallpaper.exe --duplicate
 
 # Combine flags
 live-earth-wallpaper.exe --update-once --duplicate
+
+# Enable diagnostic file logging (writes to %LOCALAPPDATA%\LiveEarthWallpaper\app.log,
+# truncated each launch). Off by default — only needed when troubleshooting.
+live-earth-wallpaper.exe --logs
+
+# Verbose diagnostic logging (DEBUG level; implies --logs)
+live-earth-wallpaper.exe --verbose
 ```
 
 ## How It Works
