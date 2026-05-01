@@ -251,7 +251,7 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, "gk2a", "band_03").await?;
 
-    tracing::info!("Fetching GK2A (timestamp: {})...", timestamp);
+    tracing::debug!("Fetching GK2A (timestamp: {})...", timestamp);
 
     // Fetch Blue, Red, Veggie bands (same wavelengths as GOES/Himawari)
     let (band01, band03, band04) = tokio::try_join!(
@@ -260,7 +260,7 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
         fetch_slider_band(client, "gk2a", "band_04", timestamp, &date_path, target_size, GK2A_TILE_SIZE),
     )?;
 
-    tracing::info!("Compositing GK2A...");
+    tracing::debug!("Compositing GK2A...");
 
     let width = band03.width();
     let height = band03.height();
@@ -286,7 +286,7 @@ async fn fetch_gk2a_image(client: &reqwest::Client) -> Result<(RgbaImage, DateTi
         .context("Failed to parse SLIDER timestamp")?
         .and_utc();
 
-    tracing::info!("GK2A composite complete ({}x{})", width, height);
+    tracing::debug!("GK2A composite complete ({}x{})", width, height);
 
     Ok((composite, image_time))
 }
@@ -299,7 +299,7 @@ async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, Da
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, "himawari", "band_03").await?;
 
-    tracing::info!("Fetching Himawari-9 (timestamp: {})...", timestamp);
+    tracing::debug!("Fetching Himawari-9 (timestamp: {})...", timestamp);
 
     // Fetch Blue, Red, Veggie bands (same wavelengths as GOES)
     let (band01, band03, band04) = tokio::try_join!(
@@ -308,7 +308,7 @@ async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, Da
         fetch_slider_band(client, "himawari", "band_04", timestamp, &date_path, target_size, HIMAWARI_TILE_SIZE),
     )?;
 
-    tracing::info!("Compositing Himawari...");
+    tracing::debug!("Compositing Himawari...");
 
     let width = band03.width();
     let height = band03.height();
@@ -334,7 +334,7 @@ async fn fetch_himawari_image(client: &reqwest::Client) -> Result<(RgbaImage, Da
         .context("Failed to parse SLIDER timestamp")?
         .and_utc();
 
-    tracing::info!("Himawari composite complete ({}x{})", width, height);
+    tracing::debug!("Himawari composite complete ({}x{})", width, height);
 
     Ok((composite, image_time))
 }
@@ -350,7 +350,7 @@ async fn fetch_goes_image_slider(
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, slider_sat, "band_02").await?;
 
-    tracing::info!("Fetching {} (timestamp: {})...", name, timestamp);
+    tracing::debug!("Fetching {} (timestamp: {})...", name, timestamp);
 
     // Fetch Blue, Red, Veggie bands
     let (band01, band02, band03) = tokio::try_join!(
@@ -359,7 +359,7 @@ async fn fetch_goes_image_slider(
         fetch_slider_band(client, slider_sat, "band_03", timestamp, &date_path, target_size, GOES_TILE_SIZE),
     )?;
 
-    tracing::info!("Compositing {}...", name);
+    tracing::debug!("Compositing {}...", name);
 
     let width = band02.width();
     let height = band02.height();
@@ -385,7 +385,7 @@ async fn fetch_goes_image_slider(
         .context("Failed to parse SLIDER timestamp")?
         .and_utc();
 
-    tracing::info!("{} composite complete ({}x{})", name, width, height);
+    tracing::debug!("{} composite complete ({}x{})", name, width, height);
 
     Ok((composite, image_time))
 }
@@ -405,7 +405,7 @@ async fn fetch_meteosat12_image(client: &reqwest::Client) -> Result<(RgbaImage, 
 
     let (timestamp, date_path) = fetch_slider_timestamp(client, "meteosat-12", "band_03").await?;
 
-    tracing::info!("Fetching Meteosat-12 (timestamp: {})...", timestamp);
+    tracing::debug!("Fetching Meteosat-12 (timestamp: {})...", timestamp);
 
     // Fetch Blue, Red, Veggie bands
     let (band01, band03, band04) = tokio::try_join!(
@@ -414,7 +414,7 @@ async fn fetch_meteosat12_image(client: &reqwest::Client) -> Result<(RgbaImage, 
         fetch_slider_band(client, "meteosat-12", "band_04", timestamp, &date_path, target_size, METEOSAT12_TILE_SIZE),
     )?;
 
-    tracing::info!("Compositing Meteosat-12...");
+    tracing::debug!("Compositing Meteosat-12...");
 
     let width = band03.width();
     let height = band03.height();
@@ -440,7 +440,7 @@ async fn fetch_meteosat12_image(client: &reqwest::Client) -> Result<(RgbaImage, 
         .context("Failed to parse SLIDER timestamp")?
         .and_utc();
 
-    tracing::info!("Meteosat-12 composite complete ({}x{})", width, height);
+    tracing::debug!("Meteosat-12 composite complete ({}x{})", width, height);
 
     Ok((composite, image_time))
 }

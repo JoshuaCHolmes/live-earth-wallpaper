@@ -1,6 +1,6 @@
 [package]
 name = "live-earth-wallpaper"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "Live Earth wallpaper with accurate star field from geostationary satellite imagery"
 authors = ["Joshua Holmes"]

@@ -61,7 +61,7 @@ fn set_wallpaper_windows(image_path: &Path) -> Result<()> {
                 .SetWallpaper(PCWSTR::null(), PCWSTR(path_wide.as_ptr()))
                 .context("Failed to set wallpaper")?;
 
-            tracing::info!("Wallpaper set to: {}", image_path.display());
+            tracing::debug!("Wallpaper set to: {}", image_path.display());
             Ok(())
         })();
 

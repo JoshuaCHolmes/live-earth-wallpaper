@@ -64,12 +64,15 @@ fn main() -> Result<()> {
 
     // Initialize logging - write to file so startup failures are diagnosable
     // (no console available with windows_subsystem = "windows")
+    // Truncate on each launch so the file stays bounded; this app runs 24/7 and
+    // the log's purpose is post-mortem of the current session, not history.
     let log_file = wallpaper::wallpaper_dir()
         .ok()
         .and_then(|dir| {
             std::fs::OpenOptions::new()
                 .create(true)
-                .append(true)
+                .write(true)
+                .truncate(true)
                 .open(dir.join("app.log"))
                 .ok()
         });
@@ -391,7 +394,7 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
 
         // Check for full scheduled update (fetch new Earth image) - only if Earth is shown
         if show_earth && last_full_update.elapsed() >= full_update_interval {
-            tracing::info!("Scheduled full update starting...");
+            tracing::debug!("Scheduled full update starting...");
             match rt.block_on(fetch_and_update_wallpaper(current_mode, show_labels, current_satellite)) {
                 Ok((_earth_img, timestamp, stale)) => {
                     cached_earth_timestamp = Some(timestamp);
@@ -430,14 +433,14 @@ fn run_with_tray(initial_mode: MultiMonitorMode) -> Result<()> {
                         }
                     }
                 } else if cached_earth_timestamp.is_some() {
-                    tracing::info!("Star refresh (using disk cache)...");
+                    tracing::debug!("Star refresh (using disk cache)...");
                     if let Err(e) = rt.block_on(render_with_disk_cached_earth(current_mode, show_labels, current_satellite, false)) {
                         tracing::error!("Star refresh failed: {}", e);
                     }
                 }
             } else {
                 // Stars-only mode refresh
-                tracing::info!("Star refresh (no Earth)...");
+                tracing::debug!("Star refresh (no Earth)...");
                 if let Err(e) = rt.block_on(render_stars_only_wallpaper(current_mode, show_labels, current_satellite)) {
                     tracing::error!("Stars-only refresh failed: {}", e);
                 }
@@ -636,7 +639,7 @@ async fn fetch_and_update_wallpaper(
     let layout = monitor::MonitorLayout::detect()
         .context("Failed to detect monitors")?;
     
-    tracing::info!(
+    tracing::debug!(
         "Rendering for {}x{} desktop ({} monitor(s), {:?} mode)",
         layout.total_width,
         layout.total_height,
@@ -657,11 +660,11 @@ async fn fetch_and_update_wallpaper(
 
     // If using cached image, convert to grayscale to indicate stale data
     if is_cached {
-        tracing::info!("Using cached image - converting to grayscale");
+        tracing::debug!("Using cached image - converting to grayscale");
         earth_image = convert_to_grayscale(&earth_image);
     }
 
-    tracing::info!(
+    tracing::debug!(
         "Earth image: {}x{} from {}{}",
         earth_image.width(),
         earth_image.height(),
@@ -685,7 +688,7 @@ async fn fetch_and_update_wallpaper(
     wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
 
     let elapsed = start.elapsed();
-    tracing::info!("Full update complete in {:.1}s", elapsed.as_secs_f64());
+    tracing::debug!("Full update complete in {:.1}s", elapsed.as_secs_f64());
 
     // Return the original (non-grayscale) earth image for caching, plus stale flag
     // Re-fetch if it was cached (grayscale), otherwise use what we have
@@ -755,7 +758,7 @@ async fn render_stars_only_wallpaper(
     let layout = monitor::MonitorLayout::detect()
         .context("Failed to detect monitors")?;
 
-    tracing::info!(
+    tracing::debug!(
         "Rendering stars-only for {}x{} desktop ({} monitor(s))",
         layout.total_width,
         layout.total_height,
@@ -779,7 +782,7 @@ async fn render_stars_only_wallpaper(
     wallpaper::set_wallpaper(&wallpaper_path).context("Failed to set wallpaper")?;
 
     let elapsed = start.elapsed();
-    tracing::info!("Stars-only render complete in {:.1}ms", elapsed.as_millis());
+    tracing::debug!("Stars-only render complete in {:.1}ms", elapsed.as_millis());
 
     Ok(())
 }
@@ -808,7 +811,7 @@ async fn fetch_earth_with_fallback(
 ) -> Result<(image::RgbaImage, DateTime<Utc>, bool)> {
     
     // Try to fetch fresh image
-    tracing::info!("Fetching {} satellite image...", sat.name());
+    tracing::debug!("Fetching {} satellite image...", sat.name());
     match satellite::fetch_earth_image(client, sat).await {
         Ok((earth_image, timestamp)) => {
             // Cache the successful fetch
@@ -819,7 +822,7 @@ async fn fetch_earth_with_fallback(
         }
         Err(e) => {
             tracing::warn!("Failed to fetch fresh image: {}", e);
-            tracing::info!("Attempting to use cached image...");
+            tracing::debug!("Attempting to use cached image...");
             
             // Try to load cached image
             let (image, timestamp) = load_cached_earth_image(sat)
@@ -869,6 +872,6 @@ fn load_cached_earth_image(sat: Satellite) -> Result<(image::RgbaImage, DateTime
         Utc::now()
     };
     
-    tracing::info!("Using cached {} image from {}", sat.name(), timestamp.format("%Y-%m-%d %H:%M UTC"));
+    tracing::debug!("Using cached {} image from {}", sat.name(), timestamp.format("%Y-%m-%d %H:%M UTC"));
     Ok((image, timestamp))
 }
