@@ -26,8 +26,9 @@ A native Windows application that displays live geostationary satellite imagery 
 - **High-DPI aware** - renders at native resolution on scaled displays
 - **Offline fallback** - uses cached imagery (shown in grayscale) when network unavailable
 - **Automatic failover** - falls back to alternate data sources if primary is unavailable
-- **System tray** - minimal UI with satellite selection, refresh, mode toggle, labels toggle, and startup options
-- **Lightweight** - ~7MB executable, ~3MB passive memory (~40-50MB briefly during refresh)
+- **System tray** - minimal UI with satellite selection, refresh, mode toggle, labels toggle, Apply To target (Desktop / Lock Screen / Both), and startup options
+- **Persistent settings** - your selected satellite, mode, toggles, and Apply To target are remembered across restarts
+- **Lightweight** - ~7MB executable, ~4MB passive memory (~40-50MB briefly during refresh)
 
 ## Requirements
 
@@ -38,7 +39,7 @@ A native Windows application that displays live geostationary satellite imagery 
 
 ### From Release
 
-Download the latest `live-earth-wallpaper.exe` from [Releases](https://github.com/JoshuaCHolmes/live-earth-wallpaper/releases) and run it.
+Download the latest `live-earth-wallpaper-x64.exe` (most PCs) or `live-earth-wallpaper-arm64.exe` (Surface Pro X, etc.) from [Releases](https://github.com/JoshuaCHolmes/live-earth-wallpaper/releases) and run it.
 
 ### From Source
 
@@ -55,9 +56,9 @@ Run the application and it will:
 
 1. Create a system tray icon
 2. Detect your monitor configuration
-3. Fetch the latest Himawari-8 satellite image
+3. Fetch the latest image from the selected geostationary satellite (default: GOES-East)
 4. Render the star field, planets, and moon for the current time
-5. Set the composite as your desktop wallpaper
+5. Set the composite as your desktop wallpaper (and/or lock screen, per the Apply To setting)
 6. Update every 10 minutes
 
 ### System Tray Menu
@@ -67,10 +68,13 @@ Run the application and it will:
 | **Refresh Now** | Immediately fetch new imagery and update wallpaper |
 | **Span Across Monitors** | Toggle between span (continuous) and duplicate (per-monitor) modes |
 | **Show Earth** | Toggle Earth imagery display (stars-only mode when disabled) |
-| **Satellite** | Select data source: Himawari-9, GOES-East, GOES-West, or GK2A |
+| **Satellite** | Select data source: Himawari-9, GOES-East, GOES-West, GK2A, or Meteosat-12 |
 | **Show Labels** | Toggle text labels for bright stars, planets, and Moon |
+| **Apply To** | Choose where to display: Desktop, Lock Screen, or Both |
 | **Run on Startup** | Toggle automatic startup with Windows |
 | **Exit** | Close the application |
+
+All settings (satellite, mode, toggles, and Apply To target) are persisted to `%LOCALAPPDATA%\LiveEarthWallpaper\config.json` and restored on the next launch.
 
 ### Command Line Flags
 
@@ -123,7 +127,7 @@ If the satellite imagery cannot be fetched (no internet, server issues), the app
 
 | Data | Source |
 |------|--------|
-| Earth imagery | [RAMMB SLIDER / CIRA](https://slider.cira.colostate.edu/) (Himawari-9, GOES-East, GOES-West, GK2A) |
+| Earth imagery | [RAMMB SLIDER / CIRA](https://slider.cira.colostate.edu/) (Himawari-9, GOES-East, GOES-West, GK2A, Meteosat-12) |
 | Star catalog | [HYG Database v4.2](https://codeberg.org/astronexus/hyg) (mag ≤ 7.5) |
 | Planet positions | [NASA JPL](https://ssd.jpl.nasa.gov/planets/approx_pos.html) orbital elements |
 | Moon position | Meeus lunar theory |
